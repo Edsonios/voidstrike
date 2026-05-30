@@ -1,0 +1,21 @@
+# Netlify configuration for the Voidstrike WH40K simulator.
+# Deploy this whole folder (drag-and-drop the folder onto Netlify,
+# or connect a Git repo). The static site is the root; the function
+# lives in netlify/functions and is reachable at:
+#   /.netlify/functions/wahapedia?file=Datasheets
+
+[build]
+  publish = "."
+  functions = "netlify/functions"
+
+# Friendly short path: /api/wahapedia?file=... -> the function
+[[redirects]]
+  from = "/api/wahapedia"
+  to = "/.netlify/functions/wahapedia"
+  status = 200
+
+# Serve index.html at the root (default, listed for clarity)
+[[redirects]]
+  from = "/"
+  to = "/index.html"
+  status = 200

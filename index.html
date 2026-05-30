@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VOIDSTRIKE — WH40K 10e Simulator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700;900&family=Barlow+Condensed:wght@300;400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+:root{
+  --void:#070809;--void2:#0d1014;--panel:#13181f;--panel2:#1a2129;
+  --line:#2a333f;--line2:#3d4a5a;--line3:#556579;
+  --bone:#ece4d2;--txt:#cdd4dc;--ash:#9aa3b0;--dim:#6b7585;
+  --gold:#d4af37;--gold2:#f0d469;--goldd:#8a7320;
+  --blood:#a31f1f;--blood2:#d83b3b;--plasma:#3fc6d6;--plasma2:#6ff0fc;
+  --acid:#9bd34a;--amber:#f0a23a;
+  --imp:#2f6fb0;--impd:#173a63;--impl:#5b9fe0;--cha:#b8342a;--chad:#5e1812;--chal:#e06a5e;--hatch:#caa64a;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{background:radial-gradient(1200px 700px at 78% -8%,#181d27 0%,transparent 58%),radial-gradient(900px 600px at -5% 108%,#1a1014 0%,transparent 52%),var(--void);
+  color:var(--txt);font-family:'Barlow Condensed',sans-serif;font-weight:400;letter-spacing:.2px;min-height:100vh;overflow-x:hidden;font-size:16px}
+body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:9999;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.022'/%3E%3C/svg%3E");mix-blend-mode:overlay}
+body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:9998;box-shadow:inset 0 0 240px 60px rgba(0,0,0,.65)}
+button{font-family:inherit}
+header{border-bottom:1px solid var(--line);padding:12px 24px;display:flex;align-items:center;gap:18px;background:linear-gradient(180deg,rgba(20,26,34,.95),rgba(7,8,9,.7));position:sticky;top:0;z-index:50;backdrop-filter:blur(8px)}
+.logo{display:flex;align-items:center;gap:14px}
+.skull{width:38px;height:38px;flex:none;filter:drop-shadow(0 0 6px rgba(212,175,55,.3))}
+h1{font-family:'Cinzel',serif;font-weight:900;font-size:1.55rem;letter-spacing:4px;color:var(--bone);text-transform:uppercase;line-height:1}
+h1 small{display:block;font-family:'Barlow Condensed';font-weight:500;font-size:.66rem;letter-spacing:5px;color:var(--gold);margin-top:3px}
+.rndbox{margin-left:auto;display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+.tag{font-family:'Share Tech Mono';font-size:.74rem;color:var(--ash);border:1px solid var(--line);padding:6px 11px;border-radius:3px;background:var(--panel);white-space:nowrap}
+.tag b{color:var(--gold2)}.tag.turn1 b{color:var(--impl)}.tag.turn2 b{color:var(--chal)}
+.modepill{font-family:'Cinzel';font-size:.62rem;letter-spacing:2px;color:var(--void);background:linear-gradient(180deg,var(--gold2),var(--goldd));padding:5px 12px;border-radius:3px;font-weight:700}
+.screen{display:none}.screen.on{display:block}
+/* MUSTER */
+.muster{max-width:1180px;margin:0 auto;padding:30px 24px 60px}
+.mhero{text-align:center;margin-bottom:22px}
+.mhero h2{font-family:'Cinzel';font-weight:900;font-size:2rem;letter-spacing:6px;color:var(--bone);border:none;justify-content:center;text-shadow:0 0 30px rgba(212,175,55,.25)}
+.mhero p{color:var(--ash);max-width:680px;margin:10px auto 0;font-size:1.02rem;line-height:1.55}
+.modeSel{display:flex;gap:14px;justify-content:center;margin:22px 0 8px;flex-wrap:wrap}
+.modeCard{width:260px;border:1px solid var(--line2);border-radius:5px;padding:18px;background:linear-gradient(165deg,var(--panel2),var(--panel));cursor:pointer;transition:.18s;position:relative;overflow:hidden}
+.modeCard:hover{border-color:var(--gold);transform:translateY(-2px)}
+.modeCard.sel{border-color:var(--gold2);box-shadow:0 0 0 1px var(--gold2),0 0 26px rgba(212,175,55,.18)}
+.modeCard h3{font-family:'Cinzel';font-size:1.05rem;letter-spacing:2px;color:var(--gold2);margin-bottom:8px}
+.modeCard p{color:var(--ash);font-size:.92rem;line-height:1.5}
+.modeCard .badge{position:absolute;top:10px;right:10px;font-family:'Share Tech Mono';font-size:.6rem;color:var(--dim);border:1px solid var(--line);padding:2px 7px;border-radius:2px}
+.sizeRow{display:none;justify-content:center;gap:16px;align-items:center;margin:6px 0 0;font-family:'Share Tech Mono';font-size:.82rem;color:var(--ash)}
+.sizeRow input{width:64px;background:var(--void);color:var(--txt);border:1px solid var(--line2);border-radius:4px;padding:6px 8px;font-family:inherit}
+/* DATA PANEL */
+.dataPanel{border:1px solid var(--line2);border-radius:6px;background:linear-gradient(165deg,var(--panel2),var(--panel));margin-top:22px;overflow:hidden}
+.dpHead{padding:13px 18px;display:flex;align-items:center;gap:12px;cursor:pointer;user-select:none}
+.dpHead:hover{background:rgba(255,255,255,.03)}
+.dpTitle{font-family:'Cinzel';font-size:.92rem;letter-spacing:2px;color:var(--gold2);font-weight:700}
+.dpSub{font-family:'Barlow Condensed';font-weight:400;font-size:.8rem;color:var(--dim);letter-spacing:1px}
+.dpStatus{margin-left:auto;font-family:'Share Tech Mono';font-size:.72rem;color:var(--ash);border:1px solid var(--line);padding:3px 9px;border-radius:3px}
+.dpStatus.loaded{color:var(--acid);border-color:var(--acid)}
+.dpBody{padding:6px 18px 18px;border-top:1px solid var(--line)}
+.dpNote{font-size:.92rem;color:var(--ash);line-height:1.5;margin:10px 0}
+.dpTabs{display:flex;gap:6px;margin:8px 0 14px;flex-wrap:wrap}
+.dpTab{font-family:'Barlow Condensed';font-weight:600;letter-spacing:1px;text-transform:uppercase;font-size:.82rem;padding:7px 14px;border:1px solid var(--line2);background:var(--panel);color:var(--ash);border-radius:4px;cursor:pointer}
+.dpTab.active{border-color:var(--gold);color:var(--gold2);background:var(--panel2)}
+.dpField{display:block;font-family:'Share Tech Mono';font-size:.74rem;color:var(--ash);margin:8px 0;letter-spacing:.5px}
+.dpField select,.dpField input,.dpTextarea{display:block;width:100%;margin-top:4px;background:var(--void);color:var(--txt);border:1px solid var(--line2);border-radius:4px;padding:8px 10px;font-family:'Share Tech Mono';font-size:.82rem}
+.dpTextarea{min-height:120px;resize:vertical}
+.dpFileInput{margin:8px 0;color:var(--ash);font-family:'Share Tech Mono';font-size:.8rem}
+.dpFiles{margin:6px 0 10px 18px;color:var(--ash);font-family:'Share Tech Mono';font-size:.78rem;line-height:1.7}
+.dpFiles .opt{color:var(--dim)}
+.dpFiles a{color:var(--plasma2);text-decoration:none;border-bottom:1px dotted var(--plasma)}
+.dpFiles a:hover{color:var(--gold2);border-color:var(--gold)}
+.dpLog{font-family:'Share Tech Mono';font-size:.74rem;color:var(--ash);background:var(--void);border:1px solid var(--line);border-radius:4px;margin-top:10px;padding:8px;max-height:150px;overflow-y:auto;white-space:pre-wrap;line-height:1.45}
+.dpLog .ok{color:var(--acid)}.dpLog .err{color:var(--blood2)}.dpLog .info{color:var(--plasma2)}
+.dpBtnRow{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.musterGrid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:22px}
+@media(max-width:880px){.musterGrid{grid-template-columns:1fr}}
+.armyCol{border:1px solid var(--line);border-radius:5px;background:rgba(19,24,31,.6);overflow:hidden}
+.armyCol.imp{border-top:3px solid var(--imp)}.armyCol.cha{border-top:3px solid var(--cha)}
+.armyHd{padding:12px 16px;display:flex;align-items:center;gap:10px;background:linear-gradient(180deg,rgba(255,255,255,.03),transparent)}
+.facSel{font-family:'Cinzel';font-size:1rem;letter-spacing:1px;font-weight:700;background:var(--void);color:var(--bone);border:1px solid var(--line2);border-radius:4px;padding:7px 10px;max-width:74%;cursor:pointer}
+.armyCol.imp .facSel{color:var(--impl)}.armyCol.cha .facSel{color:var(--chal)}
+.armyHd .ptcount{margin-left:auto;font-family:'Share Tech Mono';font-size:.84rem;color:var(--gold2);white-space:nowrap}
+.ptbar{height:5px;background:var(--void);margin:0 16px;border-radius:3px;overflow:hidden}
+.ptbar i{display:block;height:100%;transition:.3s}
+.armyCol.imp .ptbar i{background:linear-gradient(90deg,var(--impl),var(--imp))}
+.armyCol.cha .ptbar i{background:linear-gradient(90deg,var(--chal),var(--cha))}
+.ptbar i.over{background:var(--blood2)!important}
+.shopList{padding:12px 16px;max-height:380px;overflow-y:auto}
+.shopItem{display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--line);border-radius:4px;margin-bottom:8px;background:var(--panel);transition:.14s}
+.shopItem:hover{border-color:var(--line2)}.shopItem.has{border-color:var(--goldd)}
+.shopItem .si-name{flex:1}
+.shopItem .si-name b{display:block;font-weight:600;font-size:1.02rem;color:var(--bone);letter-spacing:.4px}
+.shopItem .si-name span{font-family:'Share Tech Mono';font-size:.66rem;color:var(--dim)}
+.shopItem .si-pts{font-family:'Share Tech Mono';font-size:.82rem;color:var(--gold2);min-width:42px;text-align:right}
+.qty{display:flex;align-items:center;gap:6px}
+.qbtn{width:26px;height:26px;border:1px solid var(--line2);background:var(--panel2);color:var(--bone);border-radius:4px;font-size:1.1rem;cursor:pointer;line-height:1;display:flex;align-items:center;justify-content:center}
+.qbtn:hover{border-color:var(--gold);color:var(--gold2)}
+.qnum{font-family:'Share Tech Mono';width:18px;text-align:center;color:var(--bone)}
+.startRow{display:flex;gap:14px;justify-content:center;align-items:center;margin-top:26px;flex-wrap:wrap}
+/* BATTLE LAYOUT */
+.wrap{display:grid;grid-template-columns:310px 1fr 340px;height:calc(100vh - 63px)}
+@media(max-width:1240px){.wrap{grid-template-columns:1fr;height:auto}}
+.col{overflow-y:auto;padding:16px;height:100%}
+.col.left{border-right:1px solid var(--line);background:rgba(13,16,20,.55)}
+.col.right{border-left:1px solid var(--line);background:rgba(13,16,20,.55)}
+@media(max-width:1240px){.col{height:auto;max-height:none;border:none!important}}
+.col::-webkit-scrollbar,.log::-webkit-scrollbar,.shopList::-webkit-scrollbar{width:9px}
+.col::-webkit-scrollbar-thumb,.log::-webkit-scrollbar-thumb{background:var(--line2);border-radius:4px}
+h2{font-family:'Cinzel',serif;font-weight:700;font-size:.84rem;letter-spacing:2px;text-transform:uppercase;color:var(--gold);margin-bottom:11px;border-bottom:1px solid var(--line);padding-bottom:7px;display:flex;align-items:center;gap:8px}
+h2 .num{font-family:'Share Tech Mono';color:var(--goldd);font-size:.74rem}
+.phases{display:flex;flex-direction:column;gap:5px;margin-bottom:16px}
+.phase{display:flex;align-items:center;gap:11px;padding:11px 13px;border:1px solid var(--line);border-radius:4px;background:var(--panel);transition:.18s;font-size:.98rem;text-transform:uppercase;letter-spacing:1.5px;color:var(--ash)}
+.phase .pn{font-family:'Share Tech Mono';color:var(--dim);font-size:.78rem;width:16px}
+.phase.active{border-color:var(--gold);background:linear-gradient(90deg,rgba(212,175,55,.18),var(--panel2));color:var(--gold2);box-shadow:inset 0 0 22px rgba(212,175,55,.08)}
+.phase.active .pn{color:var(--gold2)}.phase.done{color:var(--acid)}.phase.done .pn::after{content:"✓";color:var(--acid);margin-left:5px}
+.btn{font-family:'Barlow Condensed';font-weight:600;letter-spacing:1.5px;text-transform:uppercase;font-size:.92rem;padding:11px 16px;border:1px solid var(--line2);background:var(--panel2);color:var(--bone);cursor:pointer;border-radius:4px;transition:.15s;width:100%}
+.btn:hover{border-color:var(--gold);color:var(--gold2);background:var(--panel)}
+.btn:active{transform:translateY(1px)}
+.btn.primary{background:linear-gradient(180deg,var(--gold2),var(--goldd));color:#1a1505;border-color:var(--gold2);font-weight:700;font-size:1rem}
+.btn.primary:hover{filter:brightness(1.1);color:#0d0a02}
+.btn.danger{border-color:var(--blood)}.btn.danger:hover{border-color:var(--blood2);color:var(--blood2)}
+.btn:disabled{opacity:.32;cursor:not-allowed;filter:grayscale(.6)}
+.btn:disabled:hover{border-color:var(--line2);color:var(--bone);background:var(--panel2)}
+.btnrow{display:flex;gap:8px;margin-top:9px}
+.unit{border:1px solid var(--line);border-radius:5px;margin-bottom:9px;background:var(--panel);cursor:pointer;transition:.15s;position:relative;overflow:hidden}
+.unit::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--dim)}
+.unit.p1::before{background:var(--imp)}.unit.p2::before{background:var(--cha)}
+.unit:hover{border-color:var(--line2)}
+.unit.sel{border-color:var(--gold);box-shadow:0 0 0 1px var(--gold),0 0 18px rgba(212,175,55,.16)}
+.unit.dead{opacity:.38;filter:grayscale(.85)}.unit.dead .uhead b{text-decoration:line-through}
+.unit.acted{opacity:.6}
+.uhead{display:flex;align-items:center;gap:8px;padding:9px 11px 9px 15px}
+.uhead b{font-weight:600;font-size:1.06rem;letter-spacing:.4px;flex:1;color:var(--bone)}
+.upip{font-family:'Share Tech Mono';font-size:.68rem;color:var(--ash);background:var(--void);padding:3px 7px;border-radius:3px;border:1px solid var(--line)}
+.bshock{font-size:.64rem;color:var(--blood2);border:1px solid var(--blood);padding:2px 6px;border-radius:3px;letter-spacing:1px;text-transform:uppercase}
+.ustats{display:grid;grid-template-columns:repeat(6,1fr);gap:1px;background:var(--line);font-family:'Share Tech Mono';font-size:.72rem;border-top:1px solid var(--line)}
+.ustats div{background:var(--panel2);padding:5px 2px;text-align:center}
+.ustats .k{color:var(--dim);font-size:.58rem;display:block;letter-spacing:.5px}.ustats .v{color:var(--bone)}
+.uhp{height:6px;background:var(--void);display:flex}
+.uhp i{height:100%;background:linear-gradient(90deg,var(--acid),#5d8425);transition:.4s}
+.uhp i.low{background:linear-gradient(90deg,var(--blood2),var(--blood))}
+.umodels{font-family:'Share Tech Mono';font-size:.66rem;color:var(--ash);padding:4px 11px 7px 15px;display:flex;justify-content:space-between}
+.boardwrap{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:16px 14px;gap:12px;min-height:100%}
+.boardframe{border:2px solid var(--line2);padding:10px;border-radius:5px;position:relative;background:linear-gradient(135deg,#0a0c10,#11151c);box-shadow:0 0 50px rgba(0,0,0,.7),inset 0 0 70px rgba(0,0,0,.55)}
+.boardframe::before,.boardframe::after{content:"";position:absolute;width:16px;height:16px;border:2px solid var(--gold);opacity:.5}
+.boardframe::before{top:-2px;left:-2px;border-right:none;border-bottom:none}
+.boardframe::after{bottom:-2px;right:-2px;border-left:none;border-top:none}
+#board{display:block;border-radius:3px;cursor:crosshair;touch-action:none}
+.boardlegend{display:flex;gap:16px;font-family:'Share Tech Mono';font-size:.7rem;color:var(--ash);flex-wrap:wrap;justify-content:center}
+.boardlegend span{display:flex;align-items:center;gap:6px}
+.dot{width:12px;height:12px;border-radius:50%;display:inline-block}
+.sq{width:12px;height:12px;display:inline-block;border-radius:2px}
+.hint{font-size:.96rem;color:var(--txt);text-align:center;max-width:640px;letter-spacing:.3px;min-height:22px;line-height:1.5;background:rgba(0,0,0,.25);padding:9px 16px;border-radius:4px;border:1px solid var(--line)}
+.hint b{color:var(--gold2)}.hint .k{color:var(--plasma2)}
+/* TERRAIN BAR */
+.terrainBar{display:none;gap:8px;flex-wrap:wrap;justify-content:center;width:100%;max-width:720px}
+.toolBtn{font-family:'Barlow Condensed';font-weight:600;letter-spacing:1px;text-transform:uppercase;font-size:.82rem;padding:8px 14px;border:1px solid var(--line2);background:var(--panel);color:var(--ash);border-radius:4px;cursor:pointer}
+.toolBtn.sel{border-color:var(--gold);color:var(--gold2);background:var(--panel2)}
+/* LOG */
+.log{font-family:'Share Tech Mono';font-size:.78rem;line-height:1.55;color:var(--ash);background:var(--void);border:1px solid var(--line);border-radius:4px;padding:11px;height:230px;overflow-y:auto;margin-bottom:12px}
+.log .e{padding:2px 0;border-bottom:1px dotted rgba(42,51,63,.6)}
+.log .hd{color:var(--gold2);text-transform:uppercase;letter-spacing:1.5px;margin-top:7px;font-size:.78rem}
+.log .hit{color:var(--plasma2)}.log .crit{color:var(--gold2);font-weight:bold}.log .wound{color:var(--amber)}
+.log .save{color:var(--acid)}.log .kill{color:var(--blood2);font-weight:bold}.log .miss{color:var(--dim)}
+.log .roll{color:var(--bone)}.log .sys{color:var(--gold);font-style:italic}
+.dicebox{display:flex;flex-wrap:wrap;gap:5px;margin:6px 0}
+.die{width:25px;height:25px;border:1px solid var(--line2);border-radius:5px;background:var(--panel2);display:flex;align-items:center;justify-content:center;font-family:'Share Tech Mono';font-size:.82rem;color:var(--txt);animation:pop .25s ease}
+.die.s6{border-color:var(--gold);color:var(--gold2);box-shadow:0 0 9px rgba(212,175,55,.45)}
+.die.s1{border-color:var(--blood);color:var(--blood2)}.die.ok{border-color:var(--acid);color:var(--acid)}.die.bad{opacity:.42}
+@keyframes pop{from{transform:scale(.3) rotate(-12deg);opacity:0}to{transform:scale(1) rotate(0);opacity:1}}
+.scoreboard{display:flex;gap:9px;margin-bottom:14px}
+.scard{flex:1;border:1px solid var(--line);border-radius:4px;padding:9px;text-align:center;background:var(--panel)}
+.scard.p1{border-color:var(--impd)}.scard.p2{border-color:var(--chad)}
+.scard .nm{font-size:.72rem;letter-spacing:1.5px;text-transform:uppercase;font-family:'Cinzel';font-weight:700}
+.scard.p1 .nm{color:var(--impl)}.scard.p2 .nm{color:var(--chal)}
+.scard .vp{font-family:'Cinzel';font-weight:900;font-size:2rem;color:var(--bone);line-height:1.1}
+.scard .vp small{font-size:.7rem;color:var(--dim);font-family:'Share Tech Mono';font-weight:400}
+.scard .cp{font-family:'Share Tech Mono';font-size:.66rem;color:var(--gold2)}
+/* ACTION PANEL */
+.actionPanel{display:none;border:1px solid var(--gold);border-radius:5px;background:linear-gradient(165deg,var(--panel2),var(--panel));padding:12px;margin-bottom:14px;box-shadow:0 0 22px rgba(212,175,55,.12)}
+.apTitle{font-family:'Cinzel';font-weight:700;font-size:.95rem;letter-spacing:1.5px;color:var(--gold2);margin-bottom:8px}
+.apSub{font-family:'Share Tech Mono';font-size:.68rem;letter-spacing:1px;color:var(--ash);margin:10px 0 5px;text-transform:uppercase}
+.apNote{font-size:.88rem;color:var(--ash);margin:6px 0}
+.apWpns,.apTargets{display:flex;flex-direction:column;gap:5px}
+.apWpn,.apTgt{text-align:left;font-family:'Barlow Condensed';font-size:.95rem;color:var(--bone);background:var(--panel);border:1px solid var(--line2);border-radius:4px;padding:7px 10px;cursor:pointer;transition:.13s}
+.apWpn span,.apTgt span{display:block;font-family:'Share Tech Mono';font-size:.64rem;color:var(--dim);margin-top:1px}
+.apWpn:hover,.apTgt:hover{border-color:var(--gold)}
+.apWpn.sel,.apTgt.sel{border-color:var(--gold2);background:var(--panel2);box-shadow:0 0 0 1px var(--gold2) inset}
+.apWpn.used{opacity:.5}
+.apRoll{margin-top:10px}.apCancel{margin-top:7px;font-size:.78rem;padding:7px}
+.detail{font-size:.92rem;color:var(--ash);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:12px}
+.detail h3{font-family:'Cinzel';font-size:.95rem;color:var(--bone);margin-bottom:4px;letter-spacing:1px}
+.statline{font-family:'Share Tech Mono';font-size:.74rem;color:var(--ash);margin-bottom:7px;line-height:1.5}
+.statline b{color:var(--gold2)}
+.wlabel{margin-top:8px;color:var(--gold2);font-size:.66rem;letter-spacing:1.5px;font-family:'Cinzel';font-weight:700}
+.wpn{font-family:'Share Tech Mono';font-size:.7rem;color:var(--ash);border-top:1px dotted var(--line);padding:5px 0;display:flex;justify-content:space-between;gap:8px}
+.wpn .wn{color:var(--bone);flex:1}.ab{color:var(--plasma2);font-size:.64rem;display:block;margin-top:1px}
+.abRow{border-top:1px dotted var(--line);padding:6px 0;font-size:.86rem}
+.abRow b{color:var(--bone)}
+.abType{font-family:'Share Tech Mono';font-size:.58rem;color:var(--void);background:var(--goldd);padding:1px 5px;border-radius:2px;margin-left:6px;letter-spacing:.5px}
+.abDesc{color:var(--ash);font-size:.82rem;line-height:1.45;margin-top:3px}
+.toggle{font-family:'Share Tech Mono';font-size:.72rem;color:var(--ash);display:flex;align-items:center;gap:8px;margin-bottom:11px;cursor:pointer;user-select:none}
+.toggle input{accent-color:var(--gold)}
+.modal{position:fixed;inset:0;background:rgba(5,6,9,.88);z-index:200;display:none;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+.modal.on{display:flex}
+.mcard{background:linear-gradient(160deg,var(--panel2),var(--panel));border:1px solid var(--gold);border-radius:6px;padding:38px 44px;max-width:500px;text-align:center;box-shadow:0 0 70px rgba(212,175,55,.22)}
+.mcard h2{font-size:1.7rem;border:none;justify-content:center;color:var(--gold2)}
+.mcard p{color:var(--ash);margin:14px 0 24px;line-height:1.6;font-size:1.02rem}
+.victor{font-family:'Cinzel';font-weight:900;font-size:2.3rem;margin:12px 0;letter-spacing:2px}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">
+    <svg class="skull" viewBox="0 0 64 64" fill="none">
+      <path d="M32 4C18 4 9 14 9 28c0 8 3 12 6 15v9c0 3 2 4 5 4h2v-6h3v6h4v-6h4v6h4v-6h3v6h2c3 0 5-1 5-4v-9c3-3 6-7 6-15C53 14 46 4 32 4z" fill="#ece4d2"/>
+      <circle cx="22" cy="30" r="6" fill="#070809"/><circle cx="42" cy="30" r="6" fill="#070809"/>
+      <path d="M32 38l-3 7h6z" fill="#070809"/><path d="M32 1l4 5h-8z" fill="#d4af37"/>
+    </svg>
+    <h1>Voidstrike<small id="subTitle">WARHAMMER 40,000 · BOARDING ACTIONS</small></h1>
+  </div>
+  <div class="rndbox" id="hdrTags" style="display:none">
+    <span class="modepill" id="tMode">BOARDING</span>
+    <span class="tag">RND <b id="tRound">1</b>/<span id="tMaxRound">5</span></span>
+    <span class="tag turn1" id="tTurnTag">TURN · <b id="tTurn">P1</b></span>
+    <span class="tag">PHASE · <b id="tPhase">SETUP</b></span>
+  </div>
+</header>
+
+<!-- MUSTER -->
+<div class="screen on" id="screenMuster">
+  <div class="muster">
+    <div class="mhero">
+      <h2>MUSTER YOUR FORCES</h2>
+      <p>Pick a battle type, load the factions, and assemble your warband. Use <b style="color:var(--gold2)">Load All Factions &amp; Units</b> to import Wahapedia's full data export (saved on this device for next time), or play instantly with the built-in armies.</p>
+    </div>
+    <div class="modeSel" id="modeSel"></div>
+    <div class="sizeRow" id="sizeRow">
+      <span>Board size (cells):</span>
+      <label>W <input id="inW" type="number" min="12" max="40" value="24"></label>
+      <label>H <input id="inH" type="number" min="10" max="34" value="22"></label>
+      <span style="color:var(--dim)">1 cell = 2″</span>
+    </div>
+
+    <!-- DATA IMPORT -->
+    <div class="dataPanel">
+      <div class="dpHead" id="dpToggle">
+        <span class="dpTitle">▾ LOAD ALL FACTIONS &amp; UNITS</span>
+        <span class="dpSub">(Wahapedia data · incl. abilities)</span>
+        <span class="dpStatus" id="dpStatus">built-in factions only</span>
+      </div>
+      <div class="dpBody" id="dpBody" style="display:none">
+        <p class="dpNote">Imports every faction, unit and ability. Data is <b>saved on this device</b> so it's there next time — even after a restart. Use <b>Re-fetch</b> when a new 40K balance update drops.</p>
+        <div class="dpTabs">
+          <button class="dpTab active" data-tab="url">Fetch (auto)</button>
+          <button class="dpTab" data-tab="file">Upload CSV files</button>
+          <button class="dpTab" data-tab="paste">Paste CSV</button>
+        </div>
+        <div class="dpTabBody" id="tab-url">
+          <p class="dpNote">On Netlify this uses your built-in server function (reliable). Elsewhere it falls back to public proxies, which can be flaky — then use Upload.</p>
+          <label class="dpField">If using proxies, try this one first
+            <select id="proxySel"><option value="0">allorigins.win</option><option value="1">codetabs.com</option><option value="2">corsproxy.io</option><option value="3">thingproxy</option></select>
+          </label>
+          <label class="dpField">Wahapedia base<input id="baseUrl" type="text" value="https://wahapedia.ru/wh40k10ed/"></label>
+          <div class="dpBtnRow">
+            <button class="btn primary" id="fetchBtn" style="width:auto">⬇ Fetch &amp; Load</button>
+            <button class="btn" id="refetchBtn" style="width:auto">↻ Re-fetch (update)</button>
+            <button class="btn danger" id="clearBtn" style="width:auto">🗑 Clear saved data</button>
+          </div>
+          <div class="dpLog" id="dpLog"></div>
+        </div>
+        <div class="dpTabBody" id="tab-file" style="display:none">
+          <p class="dpNote"><b style="color:var(--acid)">Most reliable.</b> Right-click each link → "Save link as…", then select the files here (all at once):</p>
+          <ul class="dpFiles">
+            <li><a href="https://wahapedia.ru/wh40k10ed/Factions.csv" target="_blank" rel="noopener">Factions.csv</a></li>
+            <li><a href="https://wahapedia.ru/wh40k10ed/Datasheets.csv" target="_blank" rel="noopener">Datasheets.csv</a></li>
+            <li><a href="https://wahapedia.ru/wh40k10ed/Datasheets_models.csv" target="_blank" rel="noopener">Datasheets_models.csv</a></li>
+            <li><a href="https://wahapedia.ru/wh40k10ed/Datasheets_wargear.csv" target="_blank" rel="noopener">Datasheets_wargear.csv</a></li>
+            <li><a href="https://wahapedia.ru/wh40k10ed/Datasheets_models_cost.csv" target="_blank" rel="noopener">Datasheets_models_cost.csv</a> <span class="opt">(points)</span></li>
+            <li><a href="https://wahapedia.ru/wh40k10ed/Datasheets_keywords.csv" target="_blank" rel="noopener">Datasheets_keywords.csv</a> <span class="opt">(keywords)</span></li>
+            <li><a href="https://wahapedia.ru/wh40k10ed/Datasheets_abilities.csv" target="_blank" rel="noopener">Datasheets_abilities.csv</a> <span class="opt">(abilities)</span></li>
+            <li><a href="https://wahapedia.ru/wh40k10ed/Abilities.csv" target="_blank" rel="noopener">Abilities.csv</a> <span class="opt">(ability text)</span></li>
+          </ul>
+          <input type="file" id="fileInput" multiple accept=".csv" class="dpFileInput">
+          <div class="dpLog" id="dpLogFile"></div>
+        </div>
+        <div class="dpTabBody" id="tab-paste" style="display:none">
+          <p class="dpNote">Paste each file's contents, tag its type and stage it; repeat; then Build.</p>
+          <label class="dpField">File type
+            <select id="pasteType"><option>Factions</option><option>Datasheets</option><option>Datasheets_models</option><option>Datasheets_wargear</option><option>Datasheets_models_cost</option><option>Datasheets_keywords</option><option>Datasheets_abilities</option><option>Abilities</option></select>
+          </label>
+          <textarea id="pasteArea" class="dpTextarea" placeholder="Paste raw CSV (| delimited)…"></textarea>
+          <div class="dpBtnRow"><button class="btn" id="pasteBtn" style="width:auto">Stage file</button><button class="btn primary" id="pasteLoadBtn" style="width:auto">Build factions</button></div>
+          <div class="dpLog" id="dpLogPaste"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="musterGrid">
+      <div class="armyCol imp" id="col1">
+        <div class="armyHd"><select class="facSel" id="facSel1"></select><span class="ptcount" id="pc1">0 / 500</span></div>
+        <div class="ptbar"><i id="pb1" style="width:0%"></i></div>
+        <div class="shopList" id="shop1"></div>
+      </div>
+      <div class="armyCol cha" id="col2">
+        <div class="armyHd"><select class="facSel" id="facSel2"></select><span class="ptcount" id="pc2">0 / 500</span></div>
+        <div class="ptbar"><i id="pb2" style="width:0%"></i></div>
+        <div class="shopList" id="shop2"></div>
+      </div>
+    </div>
+    <div class="startRow">
+      <button class="btn" id="quickFill" style="width:auto">⚔ Quick Muster</button>
+      <button class="btn primary" id="toBattle" style="width:auto;padding:13px 34px">To Battlefield ▸</button>
+    </div>
+  </div>
+</div>
+
+<!-- BATTLE -->
+<div class="screen" id="screenBattle">
+  <div class="wrap">
+    <div class="col left">
+      <h2><span class="num">[I]</span> Battle Round</h2>
+      <div class="phases" id="phaseList"></div>
+      <button class="btn primary" id="advBtn">Proceed ▸</button>
+      <div class="btnrow"><button class="btn" id="autoBtn">⏩ Auto-resolve Phase</button></div>
+      <div style="height:16px"></div>
+      <div class="actionPanel" id="actionPanel"><div id="actionBody"></div></div>
+      <h2><span class="num">[II]</span> <span id="rosterTitle">Forces</span></h2>
+      <div id="rosterActive"></div>
+    </div>
+    <div class="col" style="padding:0">
+      <div class="boardwrap">
+        <div class="hint" id="hint">Set up terrain.</div>
+        <div class="terrainBar" id="terrainBar">
+          <button class="toolBtn sel" data-tool="wall">Wall</button>
+          <button class="toolBtn" data-tool="hatch">Hatchway</button>
+          <button class="toolBtn" data-tool="objective">Objective</button>
+          <button class="toolBtn" data-tool="erase">Erase</button>
+        </div>
+        <div class="boardframe"><canvas id="board" width="700" height="640"></canvas></div>
+        <div class="boardlegend" id="legend"></div>
+        <div class="btnrow" style="max-width:700px;width:100%"><button class="btn danger" id="resetBtn">↺ New Battle</button></div>
+      </div>
+    </div>
+    <div class="col right">
+      <div class="scoreboard">
+        <div class="scard p1"><div class="nm" id="sb1">Player 1</div><div class="vp" id="vp1">0<small> VP</small></div><div class="cp">CP <span id="cp1">0</span> · <span id="pts1">0</span>pts</div></div>
+        <div class="scard p2"><div class="nm" id="sb2">Player 2</div><div class="vp" id="vp2">0<small> VP</small></div><div class="cp">CP <span id="cp2">0</span> · <span id="pts2">0</span>pts</div></div>
+      </div>
+      <h2><span class="num">[III]</span> Battle Log</h2>
+      <div class="log" id="log"></div>
+      <label class="toggle"><input type="checkbox" id="dieToggle" checked> show dice rolls</label>
+      <h2><span class="num">[IV]</span> Selected Unit</h2>
+      <div id="detail" class="detail">No unit selected.</div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="modal">
+  <div class="mcard"><h2 id="modalTitle">Battle Concluded</h2><div class="victor" id="victorName">—</div><p id="victorText"></p><button class="btn primary" id="modalReset">Muster Anew</button></div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

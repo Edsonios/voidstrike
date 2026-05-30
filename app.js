@@ -115,17 +115,47 @@ function serializeFactions(){
 function loadStoredData(){
   try{
     const raw=localStorage.getItem(LS_KEY);if(!raw)return false;
-    const p=JSON.parse(raw);if(!p.TEMPLATES||!p.FACTIONS)return false;
-    Object.assign(TEMPLATES,p.TEMPLATES);
-    FACTIONS=Object.assign({},FACTIONS,p.FACTIONS);
-    dataLoaded=true;
-    const ids=Object.keys(p.FACTIONS);
-    if(ids.length>=1)pFaction[1]=ids[0];
-    if(ids.length>=2)pFaction[2]=ids[1];
-    return {nFac:ids.length,nUnits:Object.keys(p.TEMPLATES).length,ts:p.ts};
+    return applyBundle(JSON.parse(raw));
   }catch(e){return false;}
 }
 function clearStoredData(){try{localStorage.removeItem(LS_KEY);}catch(e){}}
+
+/* Apply a {TEMPLATES, FACTIONS} bundle into the live globals (shared loader). */
+function applyBundle(p){
+  if(!p||!p.TEMPLATES||!p.FACTIONS)return false;
+  Object.assign(TEMPLATES,p.TEMPLATES);
+  FACTIONS=Object.assign({},FACTIONS,p.FACTIONS);
+  dataLoaded=true;
+  const ids=Object.keys(p.FACTIONS);
+  if(ids.length>=1)pFaction[1]=ids[0];
+  if(ids.length>=2)pFaction[2]=ids[1];
+  return {nFac:ids.length,nUnits:Object.keys(p.TEMPLATES).length,ts:p.ts};
+}
+
+/* Build the committed bundle object and trigger a download as factions-data.json. */
+function exportBundle(){
+  const payload={ts:Date.now(),version:1,TEMPLATES,FACTIONS:serializeFactions()};
+  const facCount=Object.keys(payload.FACTIONS).length;
+  if(!facCount){dpLog('dpLog','Nothing to export — fetch or load data first.','err');return;}
+  const blob=new Blob([JSON.stringify(payload)],{type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');a.href=url;a.download='factions-data.json';
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url),2000);
+  dpLog('dpLog',`★ Exported factions-data.json (${facCount} factions). Commit it to your repo root.`,'ok');
+}
+
+/* On startup, try to load the committed snapshot from the repo (factions-data.json). */
+async function autoLoadCommittedData(){
+  try{
+    const res=await fetch('factions-data.json',{cache:'no-cache'});
+    if(!res.ok)return false;
+    const p=await res.json();
+    const r=applyBundle(p);
+    if(r){saveData();return r;}   // mirror into localStorage for instant next load
+    return false;
+  }catch(e){return false;}
+}
 
 /* CSV parsing */
 function parseCSV(text){
@@ -1099,29 +1129,54 @@ function backToMuster(){
   renderModeSel();renderSizeRow();renderFacSelectors();renderShops();
 }
 
-window.addEventListener('DOMContentLoaded',()=>{
+/* ---- ADMIN GATE ---- */
+const ADMIN_HASH=3757899016;   // hash of "voidstrike-admin" — change the password by replacing this number (see README)
+let adminUnlocked=false;
+function strHash(s){let h=0;for(let i=0;i<s.length;i++){h=(h*31+s.charCodeAt(i))|0;}return h>>>0;}
+function tryAdminUnlock(){
+  const v=$('adminPw').value||'';
+  if(strHash(v)===ADMIN_HASH){
+    adminUnlocked=true;$('adminGate').style.display='none';$('adminPanel').style.display='block';
+    $('adminMsg').textContent='';
+  }else{$('adminMsg').textContent='Incorrect password.';}
+}
+
+function setStatus(info,where){
+  const st=$('dpStatus');if(!st||!info)return;
+  const d=info.ts?new Date(info.ts):null;
+  st.textContent=`${info.nFac} factions · ${info.nUnits} units${where?' ('+where+')':''}`;st.classList.add('loaded');
+}
+
+window.addEventListener('DOMContentLoaded',async()=>{
   cv=$('board');ctx=cv.getContext('2d');logEl=$('log');
-  // restore saved data
-  const stored=loadStoredData();
-  if(stored){const st=$('dpStatus');if(st){const d=new Date(stored.ts);st.textContent=`${stored.nFac} factions · ${stored.nUnits} units (saved ${d.toLocaleDateString()})`;st.classList.add('loaded');}}
   renderModeSel();renderSizeRow();renderFacSelectors();renderShops();
+
+  // DATA LOAD ORDER: committed repo snapshot → localStorage → built-ins only
+  let info=null,where='';
+  const committed=await autoLoadCommittedData();
+  if(committed){info=committed;where='live data';}
+  else{const stored=loadStoredData();if(stored){info=stored;where='saved on device';}}
+  if(info){setStatus(info,where);refreshPlayerNames();renderFacSelectors();renderShops();}
+
   $('quickFill').onclick=quickMuster;
   $('toBattle').onclick=startBattle;
-  $('autoBtn').onclick=()=>{ /* auto-resolve current phase deterministically */ autoResolvePhase(); };
+  $('autoBtn').onclick=()=>autoResolvePhase();
   $('resetBtn').onclick=backToMuster;
   $('modalReset').onclick=backToMuster;
   cv.addEventListener('click',boardClick);
-  // data import UI
-  const dpBody=$('dpBody');
-  $('dpToggle').onclick=()=>{const open=dpBody.style.display!=='none';dpBody.style.display=open?'none':'block';};
+
+  // ADMIN panel (password-gated): contains all fetch/import/export controls
+  $('dpToggle').onclick=()=>{const b=$('dpBody');b.style.display=b.style.display==='none'?'block':'none';};
+  $('adminUnlock').onclick=tryAdminUnlock;
+  $('adminPw').onkeydown=e=>{if(e.key==='Enter')tryAdminUnlock();};
   document.querySelectorAll('.dpTab').forEach(tab=>tab.onclick=()=>{document.querySelectorAll('.dpTab').forEach(t=>t.classList.remove('active'));tab.classList.add('active');
     ['url','file','paste'].forEach(t=>$('tab-'+t).style.display=(t===tab.dataset.tab?'block':'none'));});
   $('fetchBtn').onclick=()=>fetchAllFactions(false);
   $('refetchBtn').onclick=()=>fetchAllFactions(true);
+  $('exportBtn').onclick=exportBundle;
   $('clearBtn').onclick=()=>{clearStoredData();location.reload();};
   $('fileInput').onchange=e=>loadFromFiles(e.target.files);
   $('pasteBtn').onclick=stagePaste;$('pasteLoadBtn').onclick=loadFromPaste;
-  // terrain tools
   document.querySelectorAll('.toolBtn').forEach(b=>b.onclick=()=>setTool(b.dataset.tool));
 });
 

@@ -69,6 +69,7 @@ h1 small{display:block;font-family:'Barlow Condensed';font-weight:500;font-size:
 .dpFiles a{color:var(--plasma2);text-decoration:none;border-bottom:1px dotted var(--plasma)}
 .dpFiles a:hover{color:var(--gold2);border-color:var(--gold)}
 .dpLog{font-family:'Share Tech Mono';font-size:.74rem;color:var(--ash);background:var(--void);border:1px solid var(--line);border-radius:4px;margin-top:10px;padding:8px;max-height:150px;overflow-y:auto;white-space:pre-wrap;line-height:1.45}
+code{font-family:'Share Tech Mono';background:var(--void);padding:1px 5px;border-radius:3px;color:var(--gold2);font-size:.85em}
 .dpLog .ok{color:var(--acid)}.dpLog .err{color:var(--blood2)}.dpLog .info{color:var(--plasma2)}
 .dpBtnRow{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
 .musterGrid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:22px}
@@ -231,7 +232,7 @@ h2 .num{font-family:'Share Tech Mono';color:var(--goldd);font-size:.74rem}
   <div class="muster">
     <div class="mhero">
       <h2>MUSTER YOUR FORCES</h2>
-      <p>Pick a battle type, load the factions, and assemble your warband. Use <b style="color:var(--gold2)">Load All Factions &amp; Units</b> to import Wahapedia's full data export (saved on this device for next time), or play instantly with the built-in armies.</p>
+      <p>Pick a battle type, choose your factions, and assemble your warband. All factions and units load automatically. Prefer a quick game? The built-in armies are always ready.</p>
     </div>
     <div class="modeSel" id="modeSel"></div>
     <div class="sizeRow" id="sizeRow">
@@ -241,56 +242,71 @@ h2 .num{font-family:'Share Tech Mono';color:var(--goldd);font-size:.74rem}
       <span style="color:var(--dim)">1 cell = 2″</span>
     </div>
 
-    <!-- DATA IMPORT -->
+    <!-- ADMIN DATA PANEL (password-gated) -->
     <div class="dataPanel">
       <div class="dpHead" id="dpToggle">
-        <span class="dpTitle">▾ LOAD ALL FACTIONS &amp; UNITS</span>
-        <span class="dpSub">(Wahapedia data · incl. abilities)</span>
+        <span class="dpTitle">▾ ADMIN · DATA MANAGEMENT</span>
+        <span class="dpSub">(maintainer only)</span>
         <span class="dpStatus" id="dpStatus">built-in factions only</span>
       </div>
       <div class="dpBody" id="dpBody" style="display:none">
-        <p class="dpNote">Imports every faction, unit and ability. Data is <b>saved on this device</b> so it's there next time — even after a restart. Use <b>Re-fetch</b> when a new 40K balance update drops.</p>
-        <div class="dpTabs">
-          <button class="dpTab active" data-tab="url">Fetch (auto)</button>
-          <button class="dpTab" data-tab="file">Upload CSV files</button>
-          <button class="dpTab" data-tab="paste">Paste CSV</button>
-        </div>
-        <div class="dpTabBody" id="tab-url">
-          <p class="dpNote">On Netlify this uses your built-in server function (reliable). Elsewhere it falls back to public proxies, which can be flaky — then use Upload.</p>
-          <label class="dpField">If using proxies, try this one first
-            <select id="proxySel"><option value="0">allorigins.win</option><option value="1">codetabs.com</option><option value="2">corsproxy.io</option><option value="3">thingproxy</option></select>
+        <!-- password gate -->
+        <div id="adminGate">
+          <p class="dpNote">Faction data loads automatically for everyone. This panel is for the site maintainer to refresh the data from Wahapedia and export a new snapshot. Enter the admin password to continue.</p>
+          <label class="dpField">Admin password
+            <input id="adminPw" type="password" placeholder="••••••••" autocomplete="off">
           </label>
-          <label class="dpField">Wahapedia base<input id="baseUrl" type="text" value="https://wahapedia.ru/wh40k10ed/"></label>
-          <div class="dpBtnRow">
-            <button class="btn primary" id="fetchBtn" style="width:auto">⬇ Fetch &amp; Load</button>
-            <button class="btn" id="refetchBtn" style="width:auto">↻ Re-fetch (update)</button>
-            <button class="btn danger" id="clearBtn" style="width:auto">🗑 Clear saved data</button>
+          <button class="btn primary" id="adminUnlock" style="width:auto">Unlock</button>
+          <span id="adminMsg" style="color:var(--blood2);font-family:'Share Tech Mono';font-size:.74rem;margin-left:10px"></span>
+        </div>
+        <!-- admin controls (hidden until unlocked) -->
+        <div id="adminPanel" style="display:none">
+          <p class="dpNote"><b>Maintainer workflow:</b> Fetch a few times to confirm the data is clean → <b>Export</b> the bundle → commit <code>factions-data.json</code> to your repo root. The app then auto-loads it for all visitors.</p>
+          <div class="dpTabs">
+            <button class="dpTab active" data-tab="url">Fetch (auto)</button>
+            <button class="dpTab" data-tab="file">Upload CSV files</button>
+            <button class="dpTab" data-tab="paste">Paste CSV</button>
           </div>
-          <div class="dpLog" id="dpLog"></div>
-        </div>
-        <div class="dpTabBody" id="tab-file" style="display:none">
-          <p class="dpNote"><b style="color:var(--acid)">Most reliable.</b> Right-click each link → "Save link as…", then select the files here (all at once):</p>
-          <ul class="dpFiles">
-            <li><a href="https://wahapedia.ru/wh40k10ed/Factions.csv" target="_blank" rel="noopener">Factions.csv</a></li>
-            <li><a href="https://wahapedia.ru/wh40k10ed/Datasheets.csv" target="_blank" rel="noopener">Datasheets.csv</a></li>
-            <li><a href="https://wahapedia.ru/wh40k10ed/Datasheets_models.csv" target="_blank" rel="noopener">Datasheets_models.csv</a></li>
-            <li><a href="https://wahapedia.ru/wh40k10ed/Datasheets_wargear.csv" target="_blank" rel="noopener">Datasheets_wargear.csv</a></li>
-            <li><a href="https://wahapedia.ru/wh40k10ed/Datasheets_models_cost.csv" target="_blank" rel="noopener">Datasheets_models_cost.csv</a> <span class="opt">(points)</span></li>
-            <li><a href="https://wahapedia.ru/wh40k10ed/Datasheets_keywords.csv" target="_blank" rel="noopener">Datasheets_keywords.csv</a> <span class="opt">(keywords)</span></li>
-            <li><a href="https://wahapedia.ru/wh40k10ed/Datasheets_abilities.csv" target="_blank" rel="noopener">Datasheets_abilities.csv</a> <span class="opt">(abilities)</span></li>
-            <li><a href="https://wahapedia.ru/wh40k10ed/Abilities.csv" target="_blank" rel="noopener">Abilities.csv</a> <span class="opt">(ability text)</span></li>
-          </ul>
-          <input type="file" id="fileInput" multiple accept=".csv" class="dpFileInput">
-          <div class="dpLog" id="dpLogFile"></div>
-        </div>
-        <div class="dpTabBody" id="tab-paste" style="display:none">
-          <p class="dpNote">Paste each file's contents, tag its type and stage it; repeat; then Build.</p>
-          <label class="dpField">File type
-            <select id="pasteType"><option>Factions</option><option>Datasheets</option><option>Datasheets_models</option><option>Datasheets_wargear</option><option>Datasheets_models_cost</option><option>Datasheets_keywords</option><option>Datasheets_abilities</option><option>Abilities</option></select>
-          </label>
-          <textarea id="pasteArea" class="dpTextarea" placeholder="Paste raw CSV (| delimited)…"></textarea>
-          <div class="dpBtnRow"><button class="btn" id="pasteBtn" style="width:auto">Stage file</button><button class="btn primary" id="pasteLoadBtn" style="width:auto">Build factions</button></div>
-          <div class="dpLog" id="dpLogPaste"></div>
+          <div class="dpTabBody" id="tab-url">
+            <p class="dpNote">On Netlify this uses your built-in server function (reliable). Elsewhere it falls back to public proxies.</p>
+            <label class="dpField">If using proxies, try this one first
+              <select id="proxySel"><option value="0">allorigins.win</option><option value="1">codetabs.com</option><option value="2">corsproxy.io</option><option value="3">thingproxy</option></select>
+            </label>
+            <label class="dpField">Wahapedia base<input id="baseUrl" type="text" value="https://wahapedia.ru/wh40k10ed/"></label>
+            <div class="dpBtnRow">
+              <button class="btn primary" id="fetchBtn" style="width:auto">⬇ Fetch &amp; Load</button>
+              <button class="btn" id="refetchBtn" style="width:auto">↻ Re-fetch (update)</button>
+            </div>
+            <div class="dpBtnRow">
+              <button class="btn" id="exportBtn" style="width:auto;border-color:var(--acid);color:var(--acid)">⬆ Export Data Bundle (factions-data.json)</button>
+              <button class="btn danger" id="clearBtn" style="width:auto">🗑 Clear saved data</button>
+            </div>
+            <div class="dpLog" id="dpLog"></div>
+          </div>
+          <div class="dpTabBody" id="tab-file" style="display:none">
+            <p class="dpNote"><b style="color:var(--acid)">Most reliable.</b> Right-click each link → "Save link as…", then select the files here (all at once):</p>
+            <ul class="dpFiles">
+              <li><a href="https://wahapedia.ru/wh40k10ed/Factions.csv" target="_blank" rel="noopener">Factions.csv</a></li>
+              <li><a href="https://wahapedia.ru/wh40k10ed/Datasheets.csv" target="_blank" rel="noopener">Datasheets.csv</a></li>
+              <li><a href="https://wahapedia.ru/wh40k10ed/Datasheets_models.csv" target="_blank" rel="noopener">Datasheets_models.csv</a></li>
+              <li><a href="https://wahapedia.ru/wh40k10ed/Datasheets_wargear.csv" target="_blank" rel="noopener">Datasheets_wargear.csv</a></li>
+              <li><a href="https://wahapedia.ru/wh40k10ed/Datasheets_models_cost.csv" target="_blank" rel="noopener">Datasheets_models_cost.csv</a> <span class="opt">(points)</span></li>
+              <li><a href="https://wahapedia.ru/wh40k10ed/Datasheets_keywords.csv" target="_blank" rel="noopener">Datasheets_keywords.csv</a> <span class="opt">(keywords)</span></li>
+              <li><a href="https://wahapedia.ru/wh40k10ed/Datasheets_abilities.csv" target="_blank" rel="noopener">Datasheets_abilities.csv</a> <span class="opt">(abilities)</span></li>
+              <li><a href="https://wahapedia.ru/wh40k10ed/Abilities.csv" target="_blank" rel="noopener">Abilities.csv</a> <span class="opt">(ability text)</span></li>
+            </ul>
+            <input type="file" id="fileInput" multiple accept=".csv" class="dpFileInput">
+            <div class="dpLog" id="dpLogFile"></div>
+          </div>
+          <div class="dpTabBody" id="tab-paste" style="display:none">
+            <p class="dpNote">Paste each file's contents, tag its type and stage it; repeat; then Build.</p>
+            <label class="dpField">File type
+              <select id="pasteType"><option>Factions</option><option>Datasheets</option><option>Datasheets_models</option><option>Datasheets_wargear</option><option>Datasheets_models_cost</option><option>Datasheets_keywords</option><option>Datasheets_abilities</option><option>Abilities</option></select>
+            </label>
+            <textarea id="pasteArea" class="dpTextarea" placeholder="Paste raw CSV (| delimited)…"></textarea>
+            <div class="dpBtnRow"><button class="btn" id="pasteBtn" style="width:auto">Stage file</button><button class="btn primary" id="pasteLoadBtn" style="width:auto">Build factions</button></div>
+            <div class="dpLog" id="dpLogPaste"></div>
+          </div>
         </div>
       </div>
     </div>

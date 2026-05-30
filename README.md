@@ -43,19 +43,33 @@ Double-click `index.html`. Everything works **except** the auto-fetch button (no
 
 ## Loading all factions & units
 
-Open **"Load All Factions & Units"** on the muster screen. Three ways:
+Faction data **loads automatically** for every visitor from a committed snapshot file (`factions-data.json`) in your repo root. Visitors never fetch from Wahapedia and can't touch the fetch controls — they just open the page and all factions are there.
 
-1. **Fetch (auto)** — on Netlify, pulls everything via the server function in one click. Off Netlify, it falls back to public CORS proxies, which are often rate-limited.
-2. **Upload CSV files** — the bulletproof method. The tab has direct links to each CSV; right-click → "Save link as…", then select them all in the file picker. Works anywhere, no network needed at load time.
-3. **Paste CSV** — paste each file's text, tag its type, stage, repeat, then Build.
+### Admin / maintainer workflow (password-gated)
 
-The files used: `Factions`, `Datasheets`, `Datasheets_models`, `Datasheets_wargear` (required), plus `Datasheets_models_cost` (points), `Datasheets_keywords` (keywords), `Datasheets_abilities` + `Abilities` (Core/Faction/Datasheet abilities).
+The fetch, import and export controls live in the **Admin · Data Management** panel on the muster screen, locked behind a password.
 
-### Data persists across restarts
-Imported data is saved in your browser's **localStorage**, so the next time you open the app — even after rebooting your PC — the same factions are there and selectable, with no re-fetch.
+- **Default password:** `voidstrike-admin`
+- **To change it:** in `app.js` find the line `const ADMIN_HASH=...` and replace the number with the hash of your chosen password. Compute the hash by opening the browser console on your site and running:
+  ```js
+  (s=>{let h=0;for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))|0;return h>>>0;})('your-new-password')
+  ```
+  Paste the resulting number as the new `ADMIN_HASH`, commit, done.
 
-- **Re-fetch (update):** pulls fresh data when a new GW balance dataslate / points update drops, and overwrites the saved copy.
-- **Clear saved data:** wipes the local copy and reverts to the two built-in armies.
+**To refresh the game data** (e.g. after a GW points/dataslate update):
+1. Open the Admin panel, enter the password.
+2. **Fetch & Load** (or **Re-fetch (update)** to bypass caches). Run it a couple of times if you want to be sure the data is complete and correct.
+3. Click **Export Data Bundle** — this downloads `factions-data.json`.
+4. Commit that file to your **repo root** (same folder as `index.html`). Netlify redeploys, and every visitor now auto-loads the new data.
+
+> **Security note:** the password is a front-end gate — it keeps casual visitors out of the data controls, but it is *not* strong security (someone technical could bypass it via the page source or console). Don't reuse a sensitive password. For this use case (stopping randoms from triggering fetches) it's perfectly adequate.
+
+> The data files used for a refresh: `Factions`, `Datasheets`, `Datasheets_models`, `Datasheets_wargear` (required), plus `Datasheets_models_cost` (points), `Datasheets_keywords` (keywords), `Datasheets_abilities` + `Abilities` (abilities).
+
+### Data load order
+1. `factions-data.json` committed in the repo (the snapshot you exported) — used for all visitors.
+2. Browser localStorage (a returning visitor's cached copy) — instant.
+3. Built-in Ultramarines + Chaos Space Marines only (if no snapshot exists yet).
 
 ---
 

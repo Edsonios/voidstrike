@@ -107,20 +107,89 @@ let unitDoctrine={};                // unitId -> doctrine id (Adaptive Strategy 
 let oathTarget={1:null,2:null};     // enemy unitId named as Oath of Moment
 let stratState={};                  // transient stratagem flags, keyed per-unit/phase
 let firstCoyActive={1:false,2:false};
+let sagaDone={1:false,2:false};     // Space Wolves: player has manually marked their Saga completed
+let waaaghCalled={1:false,2:false}; // Orks: Waaagh! has been called this battle (once per battle)
+let waaaghActive={1:false,2:false}; // Orks: Waaagh! active until start of this player's next Command phase
+let waaaghTurnLeft={1:0,2:0};       // turns the active Waaagh! has left (auto-expires)
+let shadowUsed={1:false,2:false};   // Tyranids: Shadow in the Warp used this battle (once per battle)
+let synapticImp={1:null,2:null};    // Tyranids (Synaptic Nexus): active Synaptic Imperative id this battle round
+let spotted={1:[],2:[]};            // T'au: enemy unit ids marked as Spotted by player p this Shooting phase
+let spottedML={1:[],2:[]};          // T'au: subset Spotted by a MARKERLIGHT Observer (grants Ignores Cover)
+let battleFocus={1:0,2:0};          // Aeldari: Battle Focus tokens available this battle round (spent on Agile Manoeuvres)
+let painTokens={1:0,2:0};           // Drukhari: Pain token pool (gain at Command start / per enemy destroyed / per enemy failed Battle-shock; spend to Empower)
+let empowered={1:[],2:[]};          // Drukhari: unit ids Empowered this phase (Pain abilities active; cleared each phase start)
+let yieldPoints={1:0,2:0};          // Leagues of Votann: Yield Point pool (gain by objective control / kills; threshold flips army stance)
+let votannStance={1:'hostile',2:'hostile'};  // 'hostile' (<7YP) or 'fortify' (>=7YP); flips only at end of Command phase
+let assailed={1:[],2:[]};           // Votann Persecution Prospect: enemy unit ids assailed by player p (set after a hit; label for bonuses)
+let pinned=[];                      // unit ids pinned (Persecution Prospect / suppression): -2" Move, -2 Charge
+let resurgence={1:0,2:0};           // Genestealer Cults: Resurgence point pool (Cult Ambush resurrection)
+let khorneBlessings={1:[],2:[]};    // World Eaters: active Blessing ids this battle round (e.g. 'bloodlust','warp')
+let khorneDice={1:null,2:null};     // World Eaters: current Blessings of Khorne 8D6 roll awaiting activation
+let khorneRolled={1:false,2:false}; // whether the Blessings roll has been made this battle round
+let pactPoints={1:0,2:0};           // Emperor's Children (Coterie of the Conceited): accumulated Pact points → cumulative combat tiers
+let ecPledge={1:0,2:0};             // EC: number of enemy units pledged to destroy this battle round
+let ecKills={1:0,2:0};              // EC: enemy units actually destroyed by this player this battle round (tallied for the pledge)
+let ecPledged={1:false,2:false};    // EC: whether a pledge has been made this battle round
+let favouredChampions={1:null,2:null}; // EC (Slaanesh's Chosen): unit id of the army's current Favoured Champions (reroll Wound; reassigned on a CHARACTER kill)
+let miracleDice={1:[],2:[]};        // Adepta Sororitas: Miracle dice pool — array of pre-rolled values (gain 1 per battle round + 1 per ASORITAS unit destroyed)
+let sororVow={1:null,2:null};       // Adepta Sororitas (Penitent Host): active Vow of Atonement id this round
+let sororRighteous={1:[],2:[]};     // Adepta Sororitas (Champions of Faith): unit ids that are Righteous until next Command phase
+let sororUseMiracleBshock={1:false,2:false}; // Sororitas: per-turn intent to substitute a Miracle die into Battle-shock tests
+let dgPlague={1:null,2:null};       // Death Guard: chosen Plague id ('blight'|'ague'|'soulrot') for the army
+let dgAfflictExtra={1:[],2:[]};     // Death Guard: enemy unit ids force-Afflicted by stratagem/bombardment this round
+let fluxTokens={1:0,2:0};           // Chaos Daemons (Tzeentch): Fates in Flux shared re-roll token pool
+let shadowCorrupt={1:[],2:[]};      // Chaos Daemons: objective indices Corrupted into the Shadow of Chaos (stratagem)
+let ritualTargets={1:{},2:{}};      // Thousand Sons: enemy unit ids buffed-against by manifested Rituals this phase {destiny:[],destiny10:[],twist:[],twist12:[]}
+let ritualsAttempted={1:[],2:[]};   // Thousand Sons: Ritual ids already attempted this turn (each manifestable once)
+let kindredTSon={1:null,2:null};    // Thousand Sons (Grand Coven): chosen Kindred Sorcery ability this round
+let dreadActive={1:[],2:[]};        // Chaos Knights: active Dread ability ids (accumulate over rounds 1/3/5)
+let dreadRolledRound={1:0,2:0};     // last round in which Dread abilities were banked (so we prompt once per 1/3/5)
+let darkPact={1:false,2:false};     // Heretic Astartes: Dark Pact active this phase (army-wide toggle, granting Lethal+Sustained)
+let bileAugments={1:[],2:[]};       // Creations of Bile: active augmentation ids (chosen at battle start)
 let pendingStrat=null;              // a stratagem awaiting target selection
+let pendingGate=null;               // Gate of Infinity: {p,max,ids} units offered for reserve recall
 
 function factionDataFor(p){
-  // resolve the player's faction to a DETACHMENT_DATA bucket (Space Marines covers all chapters)
+  // resolve the player's faction to a DETACHMENT_DATA bucket.
   const f=FACTIONS[pFaction[p]];if(!f)return null;
+  // chapter/sub-faction supplements take priority if present (e.g. Black Templars)
+  const chap=f.chapter||'';
+  const chapName=chap?chap[0]+chap.slice(1).toLowerCase():'';
+  if(f.name&&DETACHMENT_DATA[f.name])return DETACHMENT_DATA[f.name];
+  if(chapName&&DETACHMENT_DATA[chapName])return DETACHMENT_DATA[chapName];
+  // shared Space Marines bucket covers all loyalist chapters without their own supplement
   if(f.isSM||/space marines|adeptus astartes|ultramarines|blood angels|dark angels|space wolves|black templars|deathwatch|imperial fists|crimson fists|iron hands|salamanders|raven guard|white scars/i.test(f.name))
     return DETACHMENT_DATA["Space Marines"];
   return DETACHMENT_DATA[f.name]||null;
 }
 function detachOf(p){const d=factionDataFor(p);if(!d||!pDetach[p])return null;return d.detachments[pDetach[p]];}
-function armyRuleOf(p){const d=factionDataFor(p);return d?d.armyRule:null;}
+function armyRuleOf(p){const det=detachOf(p);if(det&&det.armyRule)return det.armyRule;const d=factionDataFor(p);return d?d.armyRule:null;}
 
 function unitHasKw(u,kw){return (u.kw||[]).includes(kw)||(u.allKw||[]).includes(kw);}
 function unitOnObjective(u){return objectives.some(o=>Math.hypot(o.hx-u.hx,o.hy-u.hy)<=1.5);}
+function isDeathwing(u){
+  // Explicit keyword, or (Dark Angels chapter) granted to Terminators / certain veterans / Dreadnoughts / Land Raiders & Repulsors
+  if(unitHasKw(u,'DEATHWING'))return true;
+  if(!unitHasKw(u,'DARK ANGELS'))return false;
+  return unitHasKw(u,'TERMINATOR')||unitHasKw(u,'DREADNOUGHT')||unitHasKw(u,'LAND RAIDER')||unitHasKw(u,'REPULSOR')
+    ||unitHasKw(u,'BLADEGUARD VETERAN SQUAD')||unitHasKw(u,'STERNGUARD VETERAN SQUAD')||unitHasKw(u,'VANGUARD VETERAN SQUAD')||unitHasKw(u,'BLADEGUARD ANCIENT');
+}
+function isRavenwing(u){
+  // Explicit keyword, or (Dark Angels chapter) granted to Mounted units and Vehicles that can Fly
+  if(unitHasKw(u,'RAVENWING'))return true;
+  if(!unitHasKw(u,'DARK ANGELS'))return false;
+  return unitHasKw(u,'MOUNTED')||(unitHasKw(u,'VEHICLE')&&unitHasKw(u,'FLY'));
+}
+function isClosestEnemy(att,def){
+  // true if def is the closest enemy unit to att
+  let best=Infinity,bid=null;
+  units.filter(e=>e.player!==att.player&&!e.dead).forEach(e=>{const d=dist(att,e);if(d<best){best=d;bid=e.id;}});
+  return bid===def.id;
+}
+function isUnravelling(target){
+  // Pantheon of Woe: an enemy unit within 6" of a friendly NECRONS MONSTER is unravelling
+  return units.some(m=>m.player!==target.player&&!m.dead&&unitHasKw(m,'NECRONS')&&unitHasKw(m,'MONSTER')&&dist(m,target)<=6);
+}
 
 /* Evaluate one fx condition string for an attack context. */
 function condMet(cond,ctx){
@@ -136,17 +205,61 @@ function oneCond(c,ctx){
       return !units.some(u=>u.player===p&&!u.dead&&(u.allKw||[]).some(k=>div.includes(k)));
     }
     case 'firstCoyActive': return firstCoyActive[p];
+    case 'sagaCompleted': return sagaDone[p];          // Space Wolves: Saga marked complete
+    case 'waaaghActive': return waaaghActive[p];        // Orks: Waaagh! currently active
+    case 'withinSynapse': return att&&unitInSynapse(att);    // Tyranids: attacker in Synapse Range
+    case 'synAug': return att&&unitInSynapse(att)&&synapticImp[p]==='aug';   // Synaptic Augmentation active+in range
+    case 'synSurge': return att&&unitInSynapse(att)&&synapticImp[p]==='surge';
+    case 'synGoad': return att&&unitInSynapse(att)&&synapticImp[p]==='goad';
+    case 'khBlood': return att&&khorneBlessingActive(p,'bloodlust');     // Unbridled Bloodlust (charge reroll)
+    case 'khRage': return att&&khorneBlessingActive(p,'rage');
+    case 'khCarnage': return att&&khorneBlessingActive(p,'carnage');
+    case 'khMartial': return att&&khorneBlessingActive(p,'martial')&&isMelee;   // Martial Excellence (Sustained melee)
+    case 'khWarp': return att&&khorneBlessingActive(p,'warp')&&isMelee;         // Warp Blades (Lethal melee)
+    case 'khDecap': return att&&khorneBlessingActive(p,'decap')&&isMelee&&def&&unitHasKw(def,'INFANTRY'); // Decapitating Strikes
+    case 'guided': return def&&!isMelee&&spotted[p]&&spotted[p].includes(def.id);            // T'au: shooting a Spotted unit
+    case 'guidedML': return def&&!isMelee&&spottedML[p]&&spottedML[p].includes(def.id);       // Spotted by a MARKERLIGHT observer
+    case 'round3plus': return round>=3;        // T'au Kauyon (rounds 3-5)
+    case 'round1to3': return round<=3;         // T'au Mont'ka (rounds 1-3)
     case 'within12': return def&&dist(att,def)<=12;
+    case 'targetWithinHalf': return def&&dist(att,def)<=12;  // approx "within half range" (range bands not tracked per weapon)
+    case 'within9': return def&&dist(att,def)<=9;     // T'au Bonded Heroes / Point-blank
+    case 'within6': return def&&dist(att,def)<=6;     // Adepta Sororitas Fervent Purgation / Rites of Fire (target within 6")
     case 'targetBeyond12': return def&&dist(att,def)>12;
     case 'attackerBeyond12': return att&&def&&dist(att,def)>12; // used defensively (att=enemy)
     case 'remainedStationary': return att&&!att.moved&&!att.advanced&&!att.fellback;
+    case 'chargedThisTurn': return att&&att.charged;            // Red Thirst / Maddened Ferocity trigger
+    case 'selfBattleshocked': return att&&att.bshock;           // BA "if Battle-shocked, +2 instead"
     case 'alreadyHeavy': return weapon&&weapon.ab&&weapon.ab.heavy;
     case 'remainedStationary+alreadyHeavy': return true; // handled via split
     case 'targetMonsterVehicle': return def&&(unitHasKw(def,'MONSTER')||unitHasKw(def,'VEHICLE'));
+    case 'targetChaos': return def&&(unitHasKw(def,'CHAOS')||unitHasKw(def,'DAEMON'));   // GK Chaos Bane
+    case 'targetDaemon': return def&&unitHasKw(def,'DAEMON');                              // Ordo Malleus Destroy the Daemonic
+    case 'empowered': return att&&unitEmpowered(att);                                       // Drukhari: this unit has spent a Pain token this phase
+    case 'selfEmpowered': return att&&unitEmpowered(att);
+    case 'votannHostile': return att&&votannStanceFor(att.player)==='hostile';               // Leagues of Votann army stance
+    case 'votannFortify': return att&&votannStanceFor(att.player)==='fortify';
+    case 'targetAssailed': return def&&att&&unitAssailedBy(def,att);                          // Votann Persecution Prospect: target labelled assailed
+    case 'selfOnObjective': return att&&unitOnObjective(att);                                 // attacking unit is within range of an objective
+    case 'isCthonianBeserks': return att&&unitHasKw(att,'CTHONIAN BESERKS');                   // Dêlve Assault Shift
+    case 'isEinhyr': return att&&(unitHasKw(att,'KÂHL')||unitHasKw(att,'EINHYR HEARTHGUARD')||unitHasKw(att,'ÛTHAR THE DESTINED'));  // Hearthband Methodical Annihilation AP
+    case 'isTerminator': return att&&unitHasKw(att,'TERMINATOR');     // GK Duty Before All
+    case 'isVehicle': return att&&unitHasKw(att,'VEHICLE');           // GK Mailed Fist
+    case 'targetInfantrySwarm': return def&&(unitHasKw(def,'INFANTRY')||unitHasKw(def,'SWARM'));  // Tyr Swarming Instincts
+    case 'isHarvester': return att&&unitHasKw(att,'HARVESTER');       // Tyr Feed the Swarm
+    case 'isTyranidWarrior': return att&&(unitHasKw(att,'TYRANID WARRIORS')||unitHasKw(att,'WINGED TYRANID PRIME'));  // Tyr Leader-beasts invuln
     case 'targetCMV': return def&&(unitHasKw(def,'CHARACTER')||unitHasKw(def,'MONSTER')||unitHasKw(def,'VEHICLE'));
     case 'targetCharacter': return def&&unitHasKw(def,'CHARACTER');
     case 'targetBelowStrength': return def&&totalWounds(def)<maxWounds(def);
     case 'selfBelowHalf': return att&&belowHalf(att);
+    case 'selfBelowStrength': return att&&totalWounds(att)<maxWounds(att);   // Stubborn Tenacity etc.
+    case 'selfWithinObjective': return att&&unitOnObjective(att);            // approx: within your Vowed objective
+    case 'deathwing': return att&&isDeathwing(att);
+    case 'ravenwing': return att&&isRavenwing(att);
+    case 'targetInfMountedChar': return def&&unitHasKw(def,'CHARACTER')&&(unitHasKw(def,'INFANTRY')||unitHasKw(def,'MOUNTED'));
+    case 'outnumbersTarget': return att&&def&&att.models>def.models;        // Pack's Quarry: more models than the target
+    case 'targetEngagedByAlly': return att&&def&&units.some(o=>o.player===att.player&&!o.dead&&o.id!==att.id&&unitHasKw(o,'ADEPTUS ASTARTES')&&engaged(o,def)); // target in ER of another friendly Astartes unit
+    case 'packsQuarry': return (att&&def&&att.models>def.models)||(att&&def&&units.some(o=>o.player===att.player&&!o.dead&&o.id!==att.id&&unitHasKw(o,'ADEPTUS ASTARTES')&&engaged(o,def)));
     case 'inTerrain': return att&&hasCover(att,att); // approx: in/near terrain
     case 'unitBattleline': return att&&unitHasKw(att,'BATTLELINE');
     case 'psykerOnly': return att&&unitHasKw(att,'PSYKER');
@@ -155,7 +268,49 @@ function oneCond(c,ctx){
     case 'targetWithinObjective': return def&&unitOnObjective(def);
     case 'selfOnHeldObjective': return att&&unitOnObjective(att);
     case 'strHigherThanT': return att&&def&&weapon&&(weapon.s+0)>def.t;
+    case 'incomingStrHigherThanSelfT': return att&&weapon&&(weapon.s+0)>att.t;  // DEFENSIVE: in ectx att=the unit being attacked, weapon=incoming attack. Fortify Takeover / Stitchflesh
+    case 'selfRighteous': return att&&isRighteous(att);                          // Adepta Sororitas Champions of Faith: this unit is Righteous
+    case 'vowAbsolution': return att&&sororVowFor(att.player)==='absolution'&&att.charged; // Sororitas Penitent Host: Absolution in Battle (charged this turn)
+    case 'selfNotVehicle': return att&&!unitHasKw(att,'VEHICLE');                // DEFENSIVE: the unit being attacked is not a VEHICLE
+    case 'strLowerThanT': return att&&def&&weapon&&(weapon.s+0)<def.t;        // Aeldari No Prey Too Big
+    case 'objectiveContested': return (att&&unitOnObjective(att))||(def&&unitOnObjective(def));  // Guardian Defend at All Costs
+    case 'isHarleMountedVeh': return att&&(unitHasKw(att,'MOUNTED')||unitHasKw(att,'VEHICLE'))&&unitHasKw(att,'HARLEQUINS');  // Serpent's Brood
+    case 'isMountedVehicle': return att&&(unitHasKw(att,'MOUNTED')||unitHasKw(att,'VEHICLE'));      // GSC Rapid Takeover
+    case 'within18': return def&&dist(att,def)<=18;       // GSC Close-range Shoot-out
+    case 'within6OfAlly': return att&&units.some(o=>o.player===att.player&&!o.dead&&o.id!==att.id&&dist(att,o)<=6);  // GSC Final Day Catalyst (approx)
     case 'strGEQT': return att&&def&&weapon&&(weapon.s+0)>=def.t;
+    case 'strLEQT': return att&&def&&weapon&&(weapon.s+0)<=def.t;     // Accept Any Challenge (melee)
+    case 'targetAfflicted': return def&&isDeathGuardArmy(att.player)&&unitAfflictedBy(def,att.player);  // Death Guard: target is Afflicted
+    case 'inShadow': return att&&unitInShadow(att,att.player);                 // Chaos Daemons: attacker within its Shadow of Chaos
+    case 'selfInShadow': return att&&unitInShadow(att,att.player);
+    case 'targetBattleshocked': return def&&def.bshock;                        // Daemons Draught of Terror etc.
+    case 'attackerBattleshocked': return def&&def.bshock;                      // defensive: in ectx, def is the real attacker (Nightmare Hunt -1 to hit)
+    case 'selfAlone': return att&&!units.some(o=>o.player===att.player&&!o.dead&&o!==att&&o.deployed&&!o.inReserve&&dist(o,att)<=3);  // Custodes Against All Odds: no friendly units within 6"
+    case 'isWalker': return att&&unitHasKw(att,'WALKER');
+    case 'selfAtStartingStrength': return att&&totalWounds(att)>=maxWounds(att)&&(att.models||1)>=(att.maxModels||att.models||1);  // Custodes Auric Armour
+    case 'kwKhorne': return att&&unitHasKw(att,'KHORNE');
+    case 'kwTzeentch': return att&&unitHasKw(att,'TZEENTCH');
+    case 'kwNurgle': return att&&unitHasKw(att,'NURGLE');
+    case 'kwSlaanesh': return att&&unitHasKw(att,'SLAANESH');
+    case 'ritDestiny': return def&&ritualMarkedHas(att.player,'destiny',def.id);          // Destiny's Ruin: re-roll Hits of 1
+    case 'ritDestiny10': return def&&ritualMarkedHas(att.player,'destiny10',def.id);      // (10+: re-roll all)
+    case 'ritTwist': return def&&ritualMarkedHas(att.player,'twist',def.id);              // Twist of Fate: +1 AP
+    case 'ritTwist12': return def&&ritualMarkedHas(att.player,'twist12',def.id);          // (12+: +2 AP)
+    case 'inFlow': return att&&isThousandSonsArmy(att.player)&&inControlZone(att.hx,att.hy,att.player);  // Hexwarp Flow of Magic (same zone model)
+    case 'kindredMaelstrom': return att&&kindredTSon[att.player]==='maelstrom';           // Grand Coven Psychic Maelstrom (+1 wound psychic)
+    case 'psychicOnly': return weapon&&(weapon.psychic||/psych/i.test(weapon.name||''));  // approx: psychic-tagged weapon
+    case 'dreadDoom': return att&&isChaosKnightsArmy(att.player)&&dreadHas(att.player,'doom')&&def&&def.bshock;  // Doom: +1 wound vs Battle-shocked
+    case 'pactActive': return att&&darkPact[att.player];                                   // Heretic Astartes: a Dark Pact is active this phase
+    case 'pactMeleeKhorne': return att&&darkPact[att.player]&&isMelee&&unitHasKw(att,'KHORNE');   // Mark of Khorne: melee crit on 5+ (with Lethal)
+    case 'pactRangedTzeentch': return att&&darkPact[att.player]&&!isMelee&&unitHasKw(att,'TZEENTCH'); // Mark of Tzeentch: ranged crit on 5+
+    case 'pactRangedNurgle': return att&&darkPact[att.player]&&!isMelee&&unitHasKw(att,'NURGLE');     // Mark of Nurgle: ranged crit on 5+ (with Sustained)
+    case 'pactMeleeSlaanesh': return att&&darkPact[att.player]&&isMelee&&unitHasKw(att,'SLAANESH');   // Mark of Slaanesh: melee crit on 5+ (with Sustained)
+    case 'pactUndivided': return att&&darkPact[att.player]&&unitHasKw(att,'CHAOS UNDIVIDED');         // Mark of Chaos Undivided: re-roll Hits of 1
+    case 'targetPsyker': return def&&unitHasKw(def,'PSYKER');         // Abhor the Witch
+    case 'meleeOnly': return isMelee;
+    case 'rangedOnly': return !isMelee;
+    case 'selfAncientNearObjective': return att&&unitOnObjective(att)&&unitHasKw(att,'ANCIENT');
+    case 'disembarkedThisTurn': return att&&att._disembarkedThisTurn;
     case 'doctrine:assault': return doctrineActiveFor(p)==='assault';
     case 'doctrine:devastator': return doctrineActiveFor(p)==='devastator';
     case 'doctrine:tactical': return doctrineActiveFor(p)==='tactical';
@@ -169,7 +324,22 @@ function oneCond(c,ctx){
     case 'dropPodThisTurn': return false;
     case 'disembarkedHeavy': return false;
     case 'tankAceStationaryish': return att&&unitHasKw(att,'VEHICLE')&&!att.advanced;
-    default: return true;
+    // --- Necrons ---
+    case 'characterLeading': return att&&(unitHasKw(att,'CHARACTER')||units.some(u=>u.player===att.player&&!u.dead&&u.id!==att.id&&unitHasKw(u,'CHARACTER')&&dist(att,u)<=3));
+    case 'targetHalfRange': return def&&weapon&&weapon.rng>0&&dist(att,def)<=weapon.rng/2;
+    case 'targetUnravelling': return def&&isUnravelling(def);
+    case 'closestTarget': return def&&isClosestEnemy(att,def);
+    case 'selfNearObjective': return att&&unitOnObjective(att);
+    case 'destroyerCult': return att&&unitHasKw(att,'DESTROYER CULT');
+    case 'targetBelowHalf': return def&&belowHalf(def);
+    case 'cryptekCanoptek': return att&&(unitHasKw(att,'CRYPTEK')||unitHasKw(att,'CANOPTEK'));
+    case 'cryptekUnit': return att&&unitHasKw(att,'CRYPTEK');
+    case 'nobleLychguardTriarch': return att&&(unitHasKw(att,'NOBLE')||unitHasKw(att,'LYCHGUARD')||unitHasKw(att,'TRIARCH'));
+    case 'vehicleMounted': return att&&(unitHasKw(att,'VEHICLE')||unitHasKw(att,'MOUNTED'));
+    case 'critWound': return false; // applied at crit-time, not pre-roll (see Ingrained Superiority note)
+    default:
+      if(c.indexOf('doctrine:')===0)return doctrineActiveFor(p)===c.slice(9); // generic round-pick stance match
+      return true;
   }
 }
 function doctrineActiveFor(p){
@@ -185,7 +355,7 @@ function gatherCombatMods(att,def,weapon,isMelee){
     plusApMelee:0,plusApRanged:0,rerollHit:0,rerollWound:0,worsenIncomingAP:0,
     reduceIncomingDmg:0,subIncomingHit:0,subIncomingWound:0,ignoresCover:false,grantCoverDef:false,
     grantSustained:0,grantLethal:false,grantDevastating:false,grantLance:false,grantIgnoresCover:false,
-    grantPrecision:false,grantAssault:false,antiKw:null,critOn:0,defFnp:0,defInvuln:0,notes:[]};
+    grantPrecision:false,grantAssault:false,antiKw:null,critOn:0,defFnp:0,defInvuln:0,subIncomingStr:0,ignoreMods:false,rerollOne:false,worsenSave:0,notes:[]};
   const ctx={att,def,weapon,isMelee,p};
   const ectx={att:def,def:att,weapon,isMelee,p:ep}; // for defender-side conditions
 
@@ -195,6 +365,54 @@ function gatherCombatMods(att,def,weapon,isMelee){
   // ---- defender-side: defensive effects (Armour of Contempt, -1 to be hit/wound, FNP, invuln)
   collectFx(def,ep,ectx,m,'defend');
 
+  // Aeldari Star Engines (Battle Focus): a flagged unit's ranged weapons gain [ASSAULT]
+  if(att._bfAssault&&!isMelee)m.grantAssault=true;
+  // World Eaters Blessings of Khorne (active army-wide this round; melee only where noted)
+  if(isMelee&&isWorldEatersArmy(p)){
+    if(khorneBlessingActive(p,'martial'))m.grantSustained=Math.max(m.grantSustained,1);
+    if(khorneBlessingActive(p,'warp'))m.grantLethal=true;
+    if(khorneBlessingActive(p,'decap')&&def&&unitHasKw(def,'INFANTRY'))m.grantDevastating=true;
+  }
+  // Death Guard chosen Plague: debuffs applied to an Afflicted unit.
+  // Skullsquirm Blight (-1 to the Afflicted attacker's Hit rolls): att is Afflicted by the DEFENDER's DG army.
+  if(isDeathGuardArmy(ep)&&dgChosenPlague(ep)==='blight'&&unitAfflictedBy(att,ep))m.subIncomingHit+=1;
+  // Rattlejoint Ague (worsen the Afflicted defender's Save): def is Afflicted by the ATTACKER's DG army.
+  if(isDeathGuardArmy(p)&&dgChosenPlague(p)==='ague'&&unitAfflictedBy(def,p))m.worsenSave+=1;
+  // Thousand Sons manifested Rituals (army-wide, target-keyed, this phase)
+  if(isThousandSonsArmy(p)&&def){
+    if(ritualMarkedHas(p,'destiny10',def.id))m.rerollHit=mergeRR(m.rerollHit,'all');
+    else if(ritualMarkedHas(p,'destiny',def.id))m.rerollHit=mergeRR(m.rerollHit,1);
+    if(ritualMarkedHas(p,'twist12',def.id)){if(isMelee)m.plusApMelee+=2;else m.plusApRanged+=2;}
+    else if(ritualMarkedHas(p,'twist',def.id)){if(isMelee)m.plusApMelee+=1;else m.plusApRanged+=1;}
+  }
+  // Chaos Knights Harbingers of Dread (army-wide flags). Doom: +1 Wound vs Battle-shocked. Darkness: -1 to be
+  // hit when the attacker is Battle-shocked or shooting from >18" away (defensive, on the Chaos Knights unit).
+  if(isChaosKnightsArmy(p)&&dreadHas(p,'doom')&&def&&def.bshock)m.addWound+=1;
+  if(isChaosKnightsArmy(ep)&&dreadHas(ep,'darkness')){
+    const far=!isMelee&&def&&att&&dist(att,def)>18;
+    if(att.bshock||far)m.subIncomingHit+=1;
+  }
+  // Heretic Astartes Dark Pact (army-wide this phase): grant both Lethal and Sustained 1 (the generous union).
+  // Detachment riders (Mark-of-Chaos crits, Cabal Str/AP) flow through collectFx via the pact* conditions.
+  if(isHereticAstartesArmy(p)&&darkPact[p]){m.grantLethal=true;m.grantSustained=Math.max(m.grantSustained,1);}
+  // Drukhari Empowered (a Pain token was spent on this unit this phase): Pain abilities are unit-specific, so as a
+  // faithful generic abstraction an Empowered unit's weapons gain [SUSTAINED HITS 1] for the phase.
+  if(att&&unitEmpowered(att))m.grantSustained=Math.max(m.grantSustained,1);
+  // Emperor's Children — Pledges to the Dark Prince (Coterie of the Conceited): cumulative Pact-point tiers, army-wide.
+  if(isCoterieArmy(p)){
+    if(pactPoints[p]>=1)m.rerollHit=mergeRR(m.rerollHit,1);                 // 1+: re-roll Hit roll of 1
+    if(pactPoints[p]>=3)m.rerollWound=mergeRR(m.rerollWound,1);             // 3+: re-roll Wound roll of 1
+    if(pactPoints[p]>=5&&isMelee){m.grantLethal=true;m.grantSustained=Math.max(m.grantSustained,1);} // 5+: melee Lethal + Sustained 1
+    if(pactPoints[p]>=7)m.critOn=m.critOn?Math.min(m.critOn,5):5;                 // 7+: Critical Hit on unmodified 5+
+  }
+  // Emperor's Children — Daemonic Empowerment (Carnival of Excess): a unit near allied Legions of Excess is Empowered →
+  // Sustained 1 (crit-on-5+ if already Sustained). Allied composition isn't modelled, so applied army-wide to EC units.
+  if(isECArmy(p)&&detachOf(p)&&/daemonic empowerment/i.test((detachOf(p).rule&&detachOf(p).rule.name)||'')){
+    if(m.grantSustained>=1)m.critOn=m.critOn?Math.min(m.critOn,5):5;
+    else m.grantSustained=Math.max(m.grantSustained,1);
+  }
+  // Emperor's Children — Favoured Champions (Slaanesh's Chosen): the army's Favoured unit re-rolls the Wound roll.
+  if(att&&isFavouredChampions(att))m.rerollWound=mergeRR(m.rerollWound,'all');
   // doctrine note for log
   const dn=doctrineActiveFor(p);
   if(rerollText(m))m.note=rerollText(m);
@@ -224,6 +442,8 @@ function applyFxList(fxArr,ctx,m,side,sourceUnit){
       case 'plusApRanged': if(!isDef)m.plusApRanged+=fx.n; break;
       case 'rerollHit': if(!isDef)m.rerollHit=mergeRR(m.rerollHit,fx.val); break;
       case 'rerollWound': if(!isDef)m.rerollWound=mergeRR(m.rerollWound,fx.val); break;
+      case 'rerollOnePerPhase': if(!isDef){m.rerollOne=true;          // once/phase single-die re-roll, approximated as re-roll of 1s
+        m.rerollHit=mergeRR(m.rerollHit,1);m.rerollWound=mergeRR(m.rerollWound,1);} break;
       case 'grant': if(!isDef){const a=fx.ab;
         if(a==='sustained')m.grantSustained=Math.max(m.grantSustained,fx.val||1);
         if(a==='lethal')m.grantLethal=true;if(a==='devastating')m.grantDevastating=true;
@@ -239,6 +459,11 @@ function applyFxList(fxArr,ctx,m,side,sourceUnit){
       case 'grantCoverDef': if(isDef)m.grantCoverDef=true; break;
       case 'fnp': if(isDef)m.defFnp=m.defFnp?Math.min(m.defFnp,fx.val):fx.val; break;
       case 'invuln': if(isDef)m.defInvuln=m.defInvuln?Math.min(m.defInvuln,fx.val):fx.val; break;
+      case 'subIncomingStr': if(isDef)m.subIncomingStr=(m.subIncomingStr||0)+fx.n; break;  // reduces attacker S (defensive)
+      case 'ignoreModifiers': if(!isDef)m.ignoreMods=true; break;     // ignore negative modifiers to our hit/wound
+      case 'saveTo': /* characteristic change handled at muster/enhancement assignment, not per-attack */ break;
+      case 'objControl': /* applied in scoring via _ocBonus when stratagem committed */ break;
+      case 'reanimate': /* hook: Reanimation Protocols healing — fires once a healing system exists */ break;
     }
   });
 }
@@ -248,13 +473,14 @@ function mergeRR(cur,val){if(cur==='all'||val==='all')return 'all';return Math.m
 function collectFx(unit,p,ctx,m,side){
   const fd=factionDataFor(p);if(!fd)return;
   const det=detachOf(p);
-  // army rule
-  if(fd.armyRule)applyFxList(fd.armyRule.fx,ctx,m,side);
+  // army rule (detachment may override the faction default, e.g. Black Templars' Vows)
+  const ar=(det&&det.armyRule)?det.armyRule:fd.armyRule;
+  if(ar)applyFxList(ar.fx,ctx,m,side);
   // detachment rule
   if(det&&det.rule)applyFxList(det.rule.fx,ctx,m,side);
   // active doctrine
   const dId=doctrineActiveFor(p);
-  if(det&&det.doctrines&&dId){const doc=det.doctrines.find(d=>d.id===dId);if(doc)applyFxList(doc.fx,ctx,m,side);}
+  if(dId){const src=doctrineSource(p);const doc=src&&src.list.find(d=>d.id===dId);if(doc)applyFxList(doc.fx,ctx,m,side);}
   // enhancements present on units of this player (leader buffs whole unit; selfOnly handled in applyFxList)
   if(det&&det.enhancements){
     units.filter(u=>u.player===p&&!u.dead&&u.enh).forEach(src=>{
@@ -270,6 +496,227 @@ function collectFx(unit,p,ctx,m,side){
   const sg=side==='attack'?unit._stratAtk:unit._stratDef;
   if(sg&&det&&det.stratagems){sg.forEach(sn=>{const s=det.stratagems.find(x=>x.name===sn);if(s)applyFxList(s.fx,ctx,m,side);});}
 }
+/* Does unit u currently have a movement-eligibility permission (e.g. eligShootAfterFallBack)?
+   Scans army rule + detachment rule + active doctrine + this unit's active stratagems + enhancement,
+   honouring each fx's condition. Used to lift the Advance/Fall-Back shooting & charging restrictions. */
+function unitHasElig(u,code){
+  const p=u.player;const fd=factionDataFor(p);if(!fd)return false;
+  const det=detachOf(p);
+  const ctx={att:u,def:null,weapon:null,isMelee:false,p};
+  const scan=fxArr=>(fxArr||[]).some(fx=>fx.k===code&&condMet(fx.cond,ctx));
+  const ar=(det&&det.armyRule)?det.armyRule:fd.armyRule;
+  if(ar&&scan(ar.fx))return true;
+  if(det&&det.rule&&scan(det.rule.fx))return true;
+  const dId=doctrineActiveFor(p);
+  if(dId){const src=doctrineSource(p);const doc=src&&src.list.find(d=>d.id===dId);if(doc&&scan(doc.fx))return true;}
+  if(det&&det.enhancements&&u.enh){const e=det.enhancements.find(x=>x.name===u.enh);if(e&&scan(e.fx))return true;}
+  if(u._stratAtk&&det&&det.stratagems){if(u._stratAtk.some(sn=>{const s=det.stratagems.find(x=>x.name===sn);return s&&scan(s.fx);}))return true;}
+  return false;
+}
+/* Tyranids: is unit u within Synapse Range of its army? True if it is a SYNAPSE model itself,
+   or within 6" of any friendly living SYNAPSE unit. (Models-per-unit abstraction: the unit's token.) */
+function unitInSynapse(u){
+  if(!u||u.dead)return false;
+  if(unitHasKw(u,'SYNAPSE'))return true;
+  return units.some(o=>o.player===u.player&&!o.dead&&o!==u&&unitHasKw(o,'SYNAPSE')&&dist(o,u)<=6);
+}
+function isTyranidArmy(p){return /tyranids/i.test((FACTIONS[pFaction[p]]||{}).name||'');}
+function isDeathGuardArmy(p){const ar=armyRuleOf(p);return /death guard/i.test((FACTIONS[pFaction[p]]||{}).name||'')||/nurgle.s gift/i.test((ar&&ar.name)||'');}
+function isDaemonsArmy(p){const ar=armyRuleOf(p);return /chaos daemons|legiones daemonica/i.test((FACTIONS[pFaction[p]]||{}).name||'')||/shadow of chaos/i.test((ar&&ar.name)||'');}
+// Which zone is a board cell in? 'own1' = player 1's deploy zone, 'own2' = player 2's, 'nml' = No Man's Land.
+function zoneOfCell(hx,hy){
+  if(entryZones[1].some(z=>hx>=z.x0&&hx<=z.x1&&hy>=z.y0&&hy<=z.y1))return 'z1';
+  if(entryZones[2].some(z=>hx>=z.x0&&hx<=z.x1&&hy>=z.y0&&hy<=z.y1))return 'z2';
+  return 'nml';
+}
+// Count objectives in each zone and who controls them (by summed OC of units within 1.5 hexes).
+function objectiveControlInZone(zone){
+  // returns {1:nControlled,2:nControlled,total}
+  let r={1:0,2:0,total:0};
+  objectives.forEach((o,i)=>{
+    if(zoneOfCell(o.hx,o.hy)!==zone)return;
+    r.total++;
+    let oc={1:0,2:0};
+    units.forEach(u=>{if(!u.dead&&u.deployed&&!u.inReserve&&Math.hypot(o.hx-u.hx,o.hy-u.hy)<=1.5)oc[u.player]+=ocOf(u);});
+    if(oc[1]>oc[2])r[1]++;else if(oc[2]>oc[1])r[2]++;
+  });
+  return r;
+}
+function ocOf(u){return Math.max(0,(u.oc||0)+(u._ocBonus||0)+armyOcBonus(u))*(u._ocMult||1)*u.models;}
+// Army-rule / detachment-rule objControl fx with scope:'army' (e.g. Lords of Dread +2 OC to Knight CHARACTERs).
+// Evaluated per-unit so conditions like characterLeading are honoured; this is a standing bonus, not a stratagem.
+function armyOcBonus(u){
+  if(!u||u.dead)return 0;const p=u.player;const fd=factionDataFor(p);if(!fd)return 0;
+  const det=detachOf(p);let bonus=0;
+  const lists=[];
+  const ar=(det&&det.armyRule)?det.armyRule:fd.armyRule;if(ar&&ar.fx)lists.push(ar.fx);
+  if(det&&det.rule&&det.rule.fx)lists.push(det.rule.fx);
+  const ctx={att:u,def:null,p,ep:(p===1?2:1),isMelee:false};
+  lists.forEach(fxArr=>fxArr.forEach(fx=>{if(fx.k==='objControl'&&fx.scope==='army'&&condMet(fx.cond,ctx))bonus+=fx.n;}));
+  return bonus;
+}
+// Pure zone geometry: is cell (hx,hy) in player dp's own zone / a controlled NML / controlled enemy zone /
+// a Corrupted-objective bubble? Used by both Shadow of Chaos (Daemons) and Flow of Magic (Thousand Sons).
+function inControlZone(hx,hy,dp){
+  const myZone=dp===1?'z1':'z2', oppZone=dp===1?'z2':'z1';
+  const z=zoneOfCell(hx,hy);
+  if(z===myZone)return true;                                   // own deployment zone always
+  if(shadowCorrupt[dp]&&shadowCorrupt[dp].some(i=>objectives[i]&&Math.hypot(objectives[i].hx-hx,objectives[i].hy-hy)*HEX_INCH<=6))return true;
+  if(z==='nml'){const c=objectiveControlInZone('nml');return c.total>0&&c[dp]*2>=c.total;}        // NML if you hold half its objectives
+  if(z===oppZone){const c=objectiveControlInZone(oppZone);return c.total>0&&c[dp]*2>=c.total;}    // enemy zone likewise
+  return false;
+}
+// Is board cell (hx,hy) within daemon player dp's Shadow of Chaos this phase?
+function inShadowOfChaos(hx,hy,dp){
+  if(!isDaemonsArmy(dp))return false;
+  return inControlZone(hx,hy,dp);
+}
+function unitInShadow(u,dp){return u&&inShadowOfChaos(u.hx,u.hy,dp);}
+// Greater Daemon keywords that project Daemonic Terror within 6".
+const GREATER_DAEMONS=['BLOODTHIRSTER','GREAT UNCLEAN ONE','KAIROS FATEWEAVER','KEEPER OF SECRETS','LORD OF CHANGE','ROTIGUS','SHALAXI HELBANE','SKARBRAND'];
+function nearGreaterDaemon(u,dp){
+  return units.some(o=>o.player===dp&&!o.dead&&o.deployed&&!o.inReserve&&GREATER_DAEMONS.some(k=>unitHasKw(o,k))&&dist(o,u)<=6);
+}
+function isScintillatingLegion(p){return /fates in flux/i.test((detachOf(p)?.rule?.name)||'');}
+function isThousandSonsArmy(p){const ar=armyRuleOf(p);return /thousand sons/i.test((FACTIONS[pFaction[p]]||{}).name||'')||/cabal of sorcerers/i.test((ar&&ar.name)||'');}
+function isChaosKnightsArmy(p){const ar=armyRuleOf(p);return /chaos knights/i.test((FACTIONS[pFaction[p]]||{}).name||'')||/harbingers of dread/i.test((ar&&ar.name)||'');}
+function isHereticAstartesArmy(p){const ar=armyRuleOf(p);return /heretic astartes|chaos space marines/i.test((FACTIONS[pFaction[p]]||{}).name||'')||/dark pacts|focus of hatred|slaves to none|empyric wellspring|debt to the soul forge|terror made manifest|iron fortitude|marks of chaos|warp portals|soul forge boons|masters of misdirection|raiders and reavers|tyrannical motivation|experimental augmentations|desperate devotion/i.test((ar&&ar.name)||'');}
+function isRenegadeWarband(p){return /slaves to none/i.test((detachOf(p)?.rule?.name)||'');}  // Renegades lose Dark Pacts
+// Make a Dark Pact for the acting player (army-wide toggle for the phase). Ld test on a representative unit;
+// fail -> D3 mortal wounds. Grants Lethal + Sustained-style benefit (we apply both as the generous union).
+function makeDarkPact(){
+  if(!isHereticAstartesArmy(turn)||isRenegadeWarband(turn)){log("sys","This army cannot make Dark Pacts.");return;}
+  if(darkPact[turn]){log("sys","A Dark Pact is already active this phase.");return;}
+  const u=units.find(x=>x.player===turn&&!x.dead&&x.deployed&&!x.inReserve);
+  const r=d6()+d6();
+  const pass=u?r>=u.ld:true;
+  log("hd",`⛧ ${PNAME[turn]} invokes a Dark Pact — Ld test ${r}${u?` vs LD${u.ld}`:''}: ${pass?'<span class="save">held</span>':'<span class="kill">FAILED</span>'}`);
+  darkPact[turn]=true;
+  if(!pass&&u){const mw=d3();applyMortals(u,mw);log("kill",`&nbsp;&nbsp;${u.name} suffers ${mw} mortal wound(s) from the failed pact.`);}
+  renderStratPanel&&renderStratPanel();
+}
+// Creations of Bile / experimental augmentations (chosen at battle start; mostly characteristic-level)
+const BILE_AUGMENTS=[
+  {id:'cholin',name:'Cholinergic Accelerants',desc:'+1 Attack to melee weapons.'},
+  {id:'hyper',name:'Hyperadrenal Infusion',desc:'+2" Move.'},
+  {id:'parane',name:'Paraneural Reactions',desc:'+1 WS (melee).'},
+  {id:'chitin',name:'Supracutaneous Chitination',desc:'+1 Toughness.'},
+  {id:'sinew',name:'Macrotensile Sinews',desc:'+1 Strength (melee).'},
+  {id:'ophth',name:'Ophthalmic Enhancement',desc:'+1 BS (ranged).'},
+];
+function isCreationsOfBile(p){return /experimental augmentations/i.test((detachOf(p)?.rule?.name)||'');}
+function haTerrorActive(p){return isHereticAstartesArmy(p)&&/terror descends|terror made manifest/i.test((detachOf(p)?.rule?.name)||'');}  // Dread Talons / Nightmare Hunt
+// The seven Dread abilities. Deathly Terror is always active; the rest are banked at rounds 1/3/5.
+const DREAD_ABILITIES=[
+  {id:'terror',name:'Deathly Terror',desc:'Enemies within 9": -1 Leadership.'},
+  {id:'despair',name:'Despair',desc:'Enemies within 9": a further -1 Leadership.'},
+  {id:'doom',name:'Doom',desc:'+1 Wound vs Battle-shocked targets.'},
+  {id:'darkness',name:'Darkness',desc:'-1 to be hit by Battle-shocked or far (>18") attackers.'},
+  {id:'dismay',name:'Dismay',desc:'Below-strength enemies within 9" take a Battle-shock test.'},
+  {id:'delirium',name:'Delirium',desc:'Below-half enemies within 9" that fail Battle-shock suffer D3 mortals.'},
+  {id:'dominion',name:'Dominion',desc:'+3" to your Aura ranges.'},
+];
+function dreadHas(p,id){return dreadActive[p]&&dreadActive[p].includes(id);}
+function dreadName(id){const d=DREAD_ABILITIES.find(x=>x.id===id);return d?d.name:id;}
+function seedDread(p){if(isChaosKnightsArmy(p)&&!dreadHas(p,'terror'))dreadActive[p].push('terror');}  // Deathly Terror always on
+function bankDread(p,id){
+  if(!isChaosKnightsArmy(p)||dreadHas(p,id))return;
+  dreadActive[p].push(id);
+  log("hd",`☠ ${PNAME[p]} — Dread ability active: ${dreadName(id)}.`);
+  renderStratPanel&&renderStratPanel();
+}
+// Effective aura range for Chaos Knights (Dominion adds 3"); used by the Leadership/Battle-shock auras.
+function dreadAuraRange(p){return dreadHas(p,'dominion')?12:9;}
+// Total Leadership worsening an enemy unit `eu` suffers from being near the Chaos Knights player kp's models.
+function dreadLdPenalty(eu,kp){
+  if(!isChaosKnightsArmy(kp))return 0;
+  const R=dreadAuraRange(kp);
+  const near=units.some(o=>o.player===kp&&!o.dead&&o.deployed&&!o.inReserve&&unitHasKw(o,'CHAOS KNIGHTS')&&dist(o,eu)<=R);
+  if(!near)return 0;
+  let pen=0;
+  if(dreadHas(kp,'terror'))pen+=1;
+  if(dreadHas(kp,'despair'))pen+=1;
+  return pen;
+}
+function isPsykerUnit(u){return u&&(unitHasKw(u,'PSYKER')||unitHasKw(u,'SORCERER')||unitHasKw(u,'CHARACTER'));}  // models able to attempt Rituals (approx)
+const RITUALS=[
+  {id:'destiny',name:"Destiny\u2019s Ruin",wc:5,desc:"Re-roll Hits of 1 vs a target (re-roll all on 10+)."},
+  {id:'surge',name:"Temporal Surge",wc:6,desc:"A friendly unit makes a D6\" move (6\" on 10+)."},
+  {id:'doombolt',name:"Doombolt",wc:7,desc:"A target suffers D3 mortal wounds (D3+3 on 11+)."},
+  {id:'twist',name:"Twist of Fate",wc:9,desc:"+1 AP vs a target (+2 on 12+)."},
+];
+function ritualMarkedHas(p,key,id){return ritualTargets[p]&&ritualTargets[p][key]&&ritualTargets[p][key].includes(id);}
+// Attempt one Ritual: pick the sorcerer model, the highest-charge Ritual that hasn't been tried, an enemy/own target.
+function attemptRitual(channel){
+  if(!isThousandSonsArmy(turn))return;
+  const sorc=units.find(u=>u.player===turn&&!u.dead&&u.deployed&&!u.inReserve&&isPsykerUnit(u)&&!u._ritualThisTurn);
+  if(!sorc){log("sys","No sorcerer available to attempt a Ritual.");return;}
+  const ritual=RITUALS.find(r=>!ritualsAttempted[turn].includes(r.id));
+  if(!ritual){log("sys","All Rituals have been attempted this turn.");return;}
+  sorc._ritualThisTurn=true;ritualsAttempted[turn].push(ritual.id);
+  const dice=[d6(),d6()];if(channel)dice.push(d6());
+  const total=dice.reduce((a,b)=>a+b,0);
+  // doubles/triples backlash: D3 mortal wounds to the sorcerer's unit
+  const counts={};dice.forEach(d=>counts[d]=(counts[d]||0)+1);
+  const hadMulti=Object.values(counts).some(c=>c>=2);
+  log("hd",`✶ ${PNAME[turn]} Ritual — ${ritual.name} (WC ${ritual.wc}): rolled ${dice.join(', ')}${channel?' (Channelled)':''} = ${total}`);
+  logDice(dice.map(v=>({v})));
+  if(hadMulti){const mw=d3();applyMortals(sorc,mw);log("kill",`&nbsp;&nbsp;Perils: ${sorc.name} suffers ${mw} mortal wound(s) (doubles).`);}
+  if(sorc.dead){log("miss","&nbsp;&nbsp;The sorcerer is destroyed — Ritual fails.");renderStratPanel();return;}
+  if(total<ritual.wc){log("miss",`&nbsp;&nbsp;Failed to manifest (needed ${ritual.wc}).`);renderStratPanel();return;}
+  manifestRitual(ritual,total);
+  renderStratPanel();
+}
+function manifestRitual(ritual,total){
+  const ep=turn===1?2:1;
+  const enemies=units.filter(u=>u.player===ep&&!u.dead&&u.deployed&&!u.inReserve);
+  if(ritual.id==='destiny'){
+    if(!enemies.length)return;const t=closestEnemyToAny(turn,enemies);
+    (ritualTargets[turn].destiny=ritualTargets[turn].destiny||[]).push(t.id);
+    if(total>=10)(ritualTargets[turn].destiny10=ritualTargets[turn].destiny10||[]).push(t.id);
+    log("sys",`&nbsp;&nbsp;Destiny\u2019s Ruin on ${t.name}: re-roll ${total>=10?'all Hits':'Hits of 1'}.`);
+  } else if(ritual.id==='twist'){
+    if(!enemies.length)return;const t=closestEnemyToAny(turn,enemies);
+    (ritualTargets[turn].twist=ritualTargets[turn].twist||[]).push(t.id);
+    if(total>=12)(ritualTargets[turn].twist12=ritualTargets[turn].twist12||[]).push(t.id);
+    log("sys",`&nbsp;&nbsp;Twist of Fate on ${t.name}: +${total>=12?2:1} AP for your attacks.`);
+  } else if(ritual.id==='doombolt'){
+    if(!enemies.length)return;const t=closestEnemyToAny(turn,enemies);
+    const mw=total>=11?(d3()+3):d3();applyMortals(t,mw);
+    log("kill",`&nbsp;&nbsp;Doombolt strikes ${t.name}: ${mw} mortal wound(s).`);
+  } else if(ritual.id==='surge'){
+    log("sys",`&nbsp;&nbsp;Temporal Surge: a friendly unit may make a ${total>=10?'6':'D6'}" move (logged).`);
+  }
+}
+function closestEnemyToAny(p,enemies){
+  // the enemy nearest to any of this player's units (a sensible auto-target)
+  const mine=units.filter(u=>u.player===p&&!u.dead&&u.deployed&&!u.inReserve);
+  let best=enemies[0],bd=Infinity;
+  enemies.forEach(e=>{mine.forEach(m=>{const d=dist(m,e);if(d<bd){bd=d;best=e;}});});
+  return best;
+}
+function grantFlux(p){if(isScintillatingLegion(p)){fluxTokens[p]=3;log("sys",`${PNAME[p]} begins with 3 Flux tokens (Fates in Flux).`);}}
+function spendFlux(){
+  // Spend one Flux token (gives the opponent one, per the rule) — a re-roll resource the player narrates.
+  if(fluxTokens[turn]<=0)return;
+  const ep=turn===1?2:1;
+  fluxTokens[turn]--;fluxTokens[ep]++;
+  log("sys",`${PNAME[turn]} spends a Flux token to re-roll (opponent gains one). ${fluxTokens[turn]} left.`);
+  renderStratPanel();
+}
+// Contagion Range grows over the battle: 3" (R1), 6" (R2), 9" (R3+). Plaguesurge/Blooming add +3" (not tracked per-unit here).
+function contagionRange(){return round<=1?3:round===2?6:9;}
+// Is enemy unit `eu` Afflicted by Death Guard player `dgP`? (within Contagion Range of any DG model, or force-Afflicted)
+function unitAfflictedBy(eu,dgP){
+  if(!eu||eu.dead)return false;
+  if(dgAfflictExtra[dgP]&&dgAfflictExtra[dgP].includes(eu.id))return true;
+  if(!isDeathGuardArmy(dgP))return false;
+  const R=contagionRange();
+  return units.some(o=>o.player===dgP&&!o.dead&&o.deployed&&!o.inReserve&&dist(o,eu)<=R);
+}
+// The chosen Plague effect for player p (defaults to Skullsquirm if DG and none chosen).
+function dgChosenPlague(p){return dgPlague[p]||(isDeathGuardArmy(p)?'blight':null);}
+function hasShadowModel(p){return units.some(u=>u.player===p&&!u.dead&&unitHasKw(u,'SYNAPSE'));}
 
 /* ===================================================================
    PERSISTENT STORAGE  (localStorage)  +  remote fetch (Netlify fn / proxy)
@@ -455,6 +902,7 @@ const SM_CHAPTERS=[
   {kw:'IMPERIAL FISTS',name:'Imperial Fists'},{kw:'CRIMSON FISTS',name:'Crimson Fists'},
   {kw:'IRON HANDS',name:'Iron Hands'},{kw:'SALAMANDERS',name:'Salamanders'},
   {kw:'RAVEN GUARD',name:'Raven Guard'},{kw:'WHITE SCARS',name:'White Scars'},
+  {kw:'BLOOD RAVENS',name:'Blood Ravens'},
 ];
 function isSpaceMarineFaction(name){
   const n=(name||'').toLowerCase();
@@ -759,6 +1207,7 @@ function newUnit(tplKey,player){
     m:t.m,t:t.t,sv:t.sv,inv:t.inv,w:t.w,ld:t.ld,oc:t.oc,pts:t.pts,abilities:t.abilities||[],
     maxModels:t.models,models:t.models,woundsLeft:t.w,ranged:t.ranged,melee:t.melee,enh:null,
     hx:-1,hy:-1,deployed:false,moved:false,advanced:false,fellback:false,charged:false,fought:false,
+    inReserve:false,_setupThisTurn:false,_arriveExtraMove:null,
     shotWith:[],bshock:false,dead:false,_stratAtk:[],_stratDef:[],_ocBonus:0,_ocMult:1};
 }
 function totalWounds(u){return (u.models-1)*u.w+u.woundsLeft;}
@@ -776,7 +1225,20 @@ function buildBattle(){
   vp={1:0,2:0};cp={1:1,2:1};round=1;turn=1;phaseIdx=0;selId=null;action=null;
   phaseDone=[false,false,false,false,false];
   activeDoctrine={1:null,2:null};usedDoctrines={1:[],2:[]};unitDoctrine={};
-  oathTarget={1:null,2:null};firstCoyActive={1:false,2:false};pendingStrat=null;
+  oathTarget={1:null,2:null};firstCoyActive={1:false,2:false};sagaDone={1:false,2:false};pendingStrat=null;pendingGate=null;
+  waaaghCalled={1:false,2:false};waaaghActive={1:false,2:false};waaaghTurnLeft={1:0,2:0};
+  shadowUsed={1:false,2:false};synapticImp={1:null,2:null};
+  spotted={1:[],2:[]};spottedML={1:[],2:[]};battleFocus={1:0,2:0};resurgence={1:0,2:0};
+  painTokens={1:0,2:0};empowered={1:[],2:[]};
+  yieldPoints={1:0,2:0};votannStance={1:'hostile',2:'hostile'};assailed={1:[],2:[]};pinned=[];
+  pactPoints={1:0,2:0};ecPledge={1:0,2:0};ecKills={1:0,2:0};ecPledged={1:false,2:false};favouredChampions={1:null,2:null};
+  miracleDice={1:[],2:[]};sororVow={1:null,2:null};sororRighteous={1:[],2:[]};sororUseMiracleBshock={1:false,2:false};
+  khorneBlessings={1:[],2:[]};khorneDice={1:null,2:null};khorneRolled={1:false,2:false};
+  dgPlague={1:null,2:null};dgAfflictExtra={1:[],2:[]};
+  fluxTokens={1:0,2:0};shadowCorrupt={1:[],2:[]};
+  ritualTargets={1:{},2:{}};ritualsAttempted={1:[],2:[]};kindredTSon={1:null,2:null};
+  dreadActive={1:[],2:[]};dreadRolledRound={1:0,2:0};
+  darkPact={1:false,2:false};bileAugments={1:[],2:[]};
 
   [1,2].forEach(p=>Object.entries(roster[p]).forEach(([k,q])=>{for(let i=0;i<q;i++)units.push(newUnit(k,p));}));
 
@@ -946,9 +1408,11 @@ function resolveAttacks(att,def,weapon,nModels,silent){
   if(ab.rapidfire&&weapon.type==="R"&&dist(att,def)<=weapon.rng/2)perModel+=ab.rapidfire;
   if(perModel<1)perModel=1;
   let attacks=perModel*nModels;
-  const wStr=weapon.s + (mods?(isMelee?mods.plusStrMelee:mods.plusStrRanged):0);
+  const wStr=Math.max(1, weapon.s + (mods?(isMelee?mods.plusStrMelee:mods.plusStrRanged):0) - (mods?mods.subIncomingStr:0));
   const wAp=weapon.ap - (mods?(isMelee?mods.plusApMelee:mods.plusApRanged):0); // ap stored negative; subtract to improve
-  const skill=clamp(weapon.skill - (mods?mods.addHit:0),2,6);
+  // ignoreMods (e.g. "ignore modifiers to Hit") cancels NEGATIVE hit modifiers against this attacker
+  const hitAdd=mods?(mods.ignoreMods?Math.max(0,mods.addHit):mods.addHit):0;
+  const skill=clamp(weapon.skill - hitAdd,2,6);
   if(!silent){let line=`<span class="roll">${att.name}</span> ▸ <span class="roll">${def.name}</span> · ${weapon.name} · <b>${attacks}</b> attacks`;
     if(mods&&mods.note)line+=` <span class="sys">[${mods.note}]</span>`;log("",line);}
   let hits=0,critHits=0,autoWounds=0,sustainExtra=0;const hitDice=[];
@@ -966,9 +1430,12 @@ function resolveAttacks(att,def,weapon,nModels,silent){
       if(ab.lethal&&autoWounds)m+=` · LETHAL ${autoWounds}`;log("",m);}
   }
   let woundAttempts=hits+sustainExtra-autoWounds;if(woundAttempts<0)woundAttempts=0;
-  let wt=woundTarget(wStr,def.t);
-  // wound roll modifier (clamped; net +/-1 cap is approximated by direct add)
-  const woundMod=mods?(mods.addWound - mods.subIncomingWound):0;
+  // Death Guard Nurgle's Gift: an Afflicted enemy has -1 Toughness vs Death Guard attacks
+  let effT=def.t;
+  if(isDeathGuardArmy(att.player)&&unitAfflictedBy(def,att.player))effT=Math.max(1,effT-1);
+  let wt=woundTarget(wStr,effT);
+  // wound roll modifier (ignoreMods cancels negative wound modifiers against this attacker)
+  const woundMod=mods?(mods.ignoreMods?Math.max(0,mods.addWound):(mods.addWound - mods.subIncomingWound)):0;
   let wounds=autoWounds,devastating=0;const woundDice=[];
   let antiOn=7;if(ab.anti&&def.kw.includes(ab.anti.kw))antiOn=ab.anti.val;
   const rerollWound=mods?mods.rerollWound:0;
@@ -990,11 +1457,13 @@ function resolveAttacks(att,def,weapon,nModels,silent){
   if(mods)apEff=Math.max(0,apEff-mods.worsenIncomingAP*0)+0; // (incoming AP worsen handled below for defender)
   // defender AP worsening (Armour of Contempt etc.) reduces attacker AP
   let apPenalty=-wAp - (mods?mods.worsenIncomingAP:0);
-  const useInv=def.inv>0 && def.inv < (def.sv+apPenalty+(cover&&!(def.sv<=3&&wAp===0)?1:0));
+  const dgSaveWorsen=mods?(mods.worsenSave||0):0;   // Death Guard Rattlejoint Ague worsens the Afflicted save
+  const effSv=def.sv+dgSaveWorsen;
+  const useInv=def.inv>0 && def.inv < (effSv+apPenalty+(cover&&!(def.sv<=3&&wAp===0)?1:0));
   const invUsed=mods&&mods.defInvuln?Math.min(def.inv||7,mods.defInvuln):def.inv;
   for(let i=0;i<normalWounds;i++){let r=d6();let need;
     if(useInv)need=invUsed||def.inv;
-    else{let mod=apPenalty;if(cover&&!(def.sv<=3&&wAp===0))mod+=1;need=def.sv-mod;}
+    else{let mod=apPenalty;if(cover&&!(def.sv<=3&&wAp===0))mod+=1;need=effSv-mod;}
     const saved=(r>=need)&&r!==1;saveDice.push({v:r,fail:true,ok:saved,bad:!saved});if(!saved)failed++;}
   if(!silent){logDice(saveDice);let sm=`&nbsp;&nbsp;Saves: <span class="save">${normalWounds-failed} saved</span>`;
     if(cover)sm+=` (cover)`;if(useInv)sm+=` (invuln ${invUsed||def.inv}+)`;log("",sm);}
@@ -1021,7 +1490,7 @@ function applyDamage(u,normalDamage,dPerHit,mortal,silent,fnp){
   if(mortal){const m2=fnpFilter(mortal);for(let m=0;m<m2;m++)dmgChunk(u,1,true);}
   const lost=before-totalWounds(u);
   if(silent)return;
-  if(u.dead)log("kill",`&nbsp;&nbsp;☠ ${u.name} DESTROYED!`);
+  if(u.dead){log("kill",`&nbsp;&nbsp;☠ ${u.name} DESTROYED!`);cultAmbushResurrect(u);painOnEnemyDeath(u);ypOnEnemyDeath(u);ecOnEnemyDeath(u,units.find(x=>x.id===selId&&x.player!==u.player&&!x.dead));miracleOnDeath(u);}
   else if(lost>0)log("",`&nbsp;&nbsp;${u.name} −<span class="kill">${lost}</span>W${fnp?' (after FNP '+fnp+'+)':''} · ${u.models} model(s) left.`);
   else log("miss",`&nbsp;&nbsp;${u.name} unharmed.`);
 }
@@ -1030,6 +1499,31 @@ function dmgChunk(u,dmg,spill){let rem=dmg;
     if(rem>=u.woundsLeft){rem-=u.woundsLeft;u.models--;if(u.models<=0){u.models=0;u.woundsLeft=0;u.dead=true;break;}u.woundsLeft=u.w;if(!spill)break;}
     else{u.woundsLeft-=rem;rem=0;}
   }
+}
+// Mortal wounds: spill across the whole unit, then handle Cult Ambush resurrection if it dies.
+function applyMortals(u,n){
+  if(!u||u.dead||n<=0)return;
+  dmgChunk(u,n,true);
+  if(u.dead){log("kill",`&nbsp;&nbsp;☠ ${u.name} DESTROYED!`);cultAmbushResurrect(u);painOnEnemyDeath(u);ypOnEnemyDeath(u);ecOnEnemyDeath(u,units.find(x=>x.id===selId&&x.player!==u.player&&!x.dead));miracleOnDeath(u);}
+}
+/* Reanimation Protocols: heal up to `wounds` across the unit.
+   First tops up the current wounded model, then returns destroyed models at 1W,
+   then heals the returned model. A wholly-destroyed unit (dead) is not revived. */
+function reanimateUnit(u,wounds,silent){
+  if(!u||u.dead||wounds<=0)return 0;
+  let healed=0;
+  for(let i=0;i<wounds;i++){
+    if(u.woundsLeft<u.w){u.woundsLeft++;healed++;}              // top up current model
+    else if(u.models<u.maxModels){u.models++;u.woundsLeft=1;healed++;} // return a destroyed model at 1W
+    else break;                                                  // at full strength
+  }
+  if(healed&&!silent)log("sys",`&nbsp;&nbsp;♻ ${u.name} reanimates <span class="save">${healed}</span>W → ${u.models}/${u.maxModels} models.`);
+  return healed;
+}
+function d3(){return (Math.floor(Math.random()*3))+1;}
+function necronLeaderBonus(u){
+  // +1 reanimation if a NECRONS CHARACTER leads (modeled: a friendly CHARACTER unit within 3")
+  return units.some(o=>o.player===u.player&&!o.dead&&o!==u&&unitHasKw(o,'CHARACTER')&&unitHasKw(o,'NECRONS')&&dist(o,u)<=3)?1:0;
 }
 
 /* ===================================================================
@@ -1043,20 +1537,80 @@ function beginPhase(){
   // clear per-phase stratagem flags
   units.forEach(u=>{u._stratAtk=[];u._stratDef=[];});
   if(ph==="Command")doCommandPhase();
-  if(ph==="Movement")units.forEach(u=>{if(u.player===turn){u.moved=false;u.advanced=false;u.fellback=false;}});
-  if(ph==="Shooting")units.forEach(u=>{if(u.player===turn)u.shotWith=[];});
+  if(ph==="Movement"){units.forEach(u=>{if(u.player===turn){u.moved=false;u.advanced=false;u.fellback=false;u._bfMove=0;u._bfAssault=false;u._bfSudden=false;}});beginReinforcements(turn);}
+  if(ph==="Shooting"){units.forEach(u=>{if(u.player===turn)u.shotWith=[];});spotted[turn]=[];spottedML[turn]=[];ritualTargets[turn]={};ritualsAttempted[turn]=[];}
+  darkPact={1:false,2:false};   // Dark Pact lasts only the phase in which it is invoked
+  empowered={1:[],2:[]};        // Empowered (Drukhari Pain abilities) lasts only the phase
   if(ph==="Charge")units.forEach(u=>{if(u.player===turn)u.charged=false;});
   if(ph==="Fight")units.forEach(u=>u.fought=false);
   updateHint();renderPhases();renderAll();render();renderStratPanel();
 }
 function doCommandPhase(){
   log("hd",`◆ R${round} · ${PNAME[turn].toUpperCase()} · COMMAND`);
+  units.forEach(u=>{if(u.player===turn){u._setupThisTurn=false;u._ritualThisTurn=false;}});   // arrival + ritual flags last only the turn
+  // Orks: a Waaagh! lasts until the start of this player's NEXT Command phase, then expires
+  if(waaaghActive[turn]){waaaghTurnLeft[turn]--;if(waaaghTurnLeft[turn]<=0){waaaghActive[turn]=false;log("sys",`The Waaagh! subsides for ${PNAME[turn]}.`);}}
+  // Tyranids (Synaptic Nexus): a Synaptic Imperative lasts the battle round; clear it so it can be re-picked
+  if(isTyranidArmy(turn))synapticImp[turn]=null;
+  if(isThousandSonsArmy(turn))kindredTSon[turn]=null;   // Grand Coven Kindred Sorcery: re-pickable each round
+  if(isSororitasArmy(turn)){sororRighteous[turn]=[];}  // Righteous lasts until this player's next Command phase, then is re-picked
   cp[turn]+=1;log("sys",`+1 CP → ${cp[turn]} CP.`);
+  // Drukhari Power from Pain: +1 Pain token at the start of each Command phase
+  if(isDrukhariArmy(turn))gainPain(turn,1,'Command phase');
+  // Tzeentch Fates in Flux: in your Command phase, if the opponent has any Flux tokens, you gain one
+  if(isScintillatingLegion(turn)){const ep=turn===1?2:1;if(fluxTokens[ep]>0){fluxTokens[turn]++;fluxTokens[ep]--;log("sys",`Fates in Flux: ${PNAME[turn]} draws a Flux token from the opponent (${fluxTokens[turn]} held).`);}}
   units.filter(u=>u.player===turn&&!u.dead&&belowHalf(u)).forEach(u=>{
-    const r=d6()+d6();const pass=r>=u.ld;
-    log("",`Battle-shock ${u.name}: <b>${r}</b> vs LD${u.ld} — ${pass?'<span class="save">PASS</span>':'<span class="kill">FAIL · shocked</span>'}`);
-    u.bshock=!pass;});
+    let r,syn=isTyranidArmy(turn)&&unitInSynapse(u);
+    if(syn){const a=d6(),b=d6(),c=d6();r=a+b+c-Math.min(a,b,c);}  // 3D6 keep highest 2 (Synapse)
+    else r=d6()+d6();
+    // Adepta Sororitas Acts of Faith: substitute one die of the 2D6 Battle-shock test with a Miracle dice (if armed).
+    let miracleSub=null;
+    if(isSororitasArmy(turn)&&sororUseMiracleBshock[turn]&&miracleDice[turn].length){
+      const md=spendBestMiracle(turn);if(md!=null){r=md+d6();miracleSub=md;}
+    }
+    // Chaos Daemons: Daemonic Manifestation (+1 in own Shadow); Daemonic Terror (-1 from enemy Shadow / Greater Daemon)
+    const ep=turn===1?2:1;
+    let mod=0,manifest=false,terror=false;
+    if(isDaemonsArmy(turn)&&unitInShadow(u,turn)){mod+=1;manifest=true;}
+    if(isDaemonsArmy(ep)&&(unitInShadow(u,ep)||nearGreaterDaemon(u,ep))){mod-=1;terror=true;}
+    // Heretic Astartes terror detachments (Dread Talons / Nightmare Hunt): -1 to the test when within 12" of an HA unit
+    if(haTerrorActive(ep)&&units.some(o=>o.player===ep&&!o.dead&&o.deployed&&!o.inReserve&&unitHasKw(o,'HERETIC ASTARTES')&&dist(o,u)<=6)){mod-=1;}
+    // Chaos Knights Harbingers of Dread: Deathly Terror / Despair worsen the enemy's Leadership (higher LD = harder)
+    const ldPen=dreadLdPenalty(u,ep);
+    const effLd=u.ld+ldPen;
+    r+=mod;
+    const pass=r>=effLd;
+    log("",`Battle-shock ${u.name}: <b>${r}</b> vs LD${effLd}${syn?' (Synapse 3D6)':''}${miracleSub!=null?` (Miracle ${miracleSub}+D6)`:''}${mod?` (${mod>0?'+':''}${mod} Shadow)`:''}${ldPen?` (+${ldPen} Dread)`:''} — ${pass?'<span class="save">PASS</span>':'<span class="kill">FAIL · shocked</span>'}`);
+    u.bshock=!pass;
+    if(!pass&&isDrukhariArmy(ep))gainPain(ep,1,'enemy failed Battle-shock');  // Power from Pain: +1 when an enemy fails Battle-shock
+    if(manifest&&pass){const h=reanimateUnit(u,d3());if(h)log("sys",`&nbsp;&nbsp;Daemonic Manifestation: ${u.name} reknits ${h}W.`);}
+    if(terror&&!pass){const mw=d3();applyMortals(u,mw);log("kill",`&nbsp;&nbsp;Daemonic Terror: ${u.name} suffers ${mw} mortal wound(s).`);}
+    // Chaos Knights Delirium: a below-half enemy near a Chaos Knight that fails Battle-shock suffers D3 mortal wounds
+    if(!pass&&isChaosKnightsArmy(ep)&&dreadHas(ep,'delirium')&&belowHalf(u)){
+      const R=dreadAuraRange(ep);
+      if(units.some(o=>o.player===ep&&!o.dead&&o.deployed&&!o.inReserve&&unitHasKw(o,'CHAOS KNIGHTS')&&dist(o,u)<=R)){
+        const mw=d3();applyMortals(u,mw);log("kill",`&nbsp;&nbsp;Delirium: ${u.name} suffers ${mw} mortal wound(s).`);
+      }
+    }
+  });
   units.filter(u=>u.player===turn&&!belowHalf(u)).forEach(u=>u.bshock=false);
+  if(isSororitasArmy(turn))sororUseMiracleBshock[turn]=false;  // Acts of Faith arm is consumed once this phase's Battle-shock tests are done
+  // Reanimation Protocols: NECRONS units heal D3 wounds at end of Command phase
+  const ar=armyRuleOf(turn);
+  if(ar&&/reanimation/i.test(ar.name)){
+    units.filter(u=>u.player===turn&&!u.dead&&unitHasKw(u,'NECRONS')).forEach(u=>{
+      const n=d3()+necronLeaderBonus(u);reanimateUnit(u,n);});
+  }
+  // Feed the Swarm (Assimilation Swarm): each HARVESTER heals a friendly TYRANIDS unit within 6"
+  if(isTyranidArmy(turn)&&/feed the swarm/i.test((detachOf(turn)?.rule?.name)||'')){
+    const harvesters=units.filter(u=>u.player===turn&&!u.dead&&unitHasKw(u,'HARVESTER'));
+    harvesters.forEach(h=>{
+      const tgt=units.find(u=>u.player===turn&&!u.dead&&dist(u,h)<=6&&totalWounds(u)<maxWounds(u));
+      if(tgt)reanimateUnit(tgt,d3()+1);
+    });
+  }
+  // Leagues of Votann (Prioritised Efficiency): at end of Command phase, gain YP from objective control, then re-evaluate stance.
+  if(isVotannArmy(turn))votannCommandYield(turn);
   phaseDone[0]=true;
   // prompt Oath of Moment + doctrine selection for the active player
   promptCommandChoices();
@@ -1065,32 +1619,40 @@ function doCommandPhase(){
 function promptCommandChoices(){
   const ar=armyRuleOf(turn);
   const det=detachOf(turn);
-  // Oath of Moment (or any army rule that needs an enemy target)
+  // Oath of Moment (or any army rule that needs an enemy target). Vows/Litanies don't pick an enemy.
   if(ar&&/oath/i.test(ar.name)){
     const enemies=units.filter(u=>u.player!==turn&&!u.dead);
     if(enemies.length){action={kind:'oath'};showActionPanel(true);renderAction();return;}
   }
-  // doctrine selection
-  if(det&&det.doctrines&&det.doctrines.length){promptDoctrine();return;}
+  maybePromptDoctrine();
 }
-function promptDoctrine(){
-  const det=detachOf(turn);if(!det||!det.doctrines)return;
+function doctrineSource(p){
+  // returns the list + label for selectable command states: detachment doctrines, OR a Vow/Litany army rule
+  const det=detachOf(p);
+  if(det&&det.doctrines&&det.doctrines.length)return {list:det.doctrines,label:det.doctrineLabel||'Doctrine',once:!!det.doctrineOncePerBattle};
+  const ar=armyRuleOf(p);
+  if(ar&&ar.choices&&ar.choices.length)return {list:ar.choices,label:ar.choiceLabel||'Vow',once:!!ar.oncePerBattle};
+  return null;
+}
+function maybePromptDoctrine(){
+  const src=doctrineSource(turn);
+  if(!src){action=null;showActionPanel(false);return;}
+  // once-per-battle states (Vows): if already chosen, don't re-prompt
+  if(src.once && activeDoctrine[turn]){action=null;showActionPanel(false);return;}
   action={kind:'doctrine'};showActionPanel(true);renderAction();
 }
+function promptDoctrine(){maybePromptDoctrine();}
 function chooseDoctrine(id){
   activeDoctrine[turn]=id;
   if(!usedDoctrines[turn].includes(id))usedDoctrines[turn].push(id);
-  const det=detachOf(turn);const doc=det.doctrines.find(d=>d.id===id);
-  log("sys",`Doctrine active: ${doc?doc.name:id}.`);
+  const src=doctrineSource(turn);const doc=src&&src.list.find(d=>d.id===id);
+  log("sys",`${src?src.label:'Doctrine'} active: ${doc?doc.name:id}.`);
   action=null;showActionPanel(false);renderAll();render();renderStratPanel();updateHint();
 }
 function chooseOath(eid){
   oathTarget[turn]=eid;const e=units.find(u=>u.id===eid);
   log("sys",`Oath of Moment → ${e?e.name:'target'}.`);
-  // proceed to doctrine if any
-  const det=detachOf(turn);
-  if(det&&det.doctrines&&det.doctrines.length)promptDoctrine();
-  else{action=null;showActionPanel(false);}
+  maybePromptDoctrine();
   renderAll();render();
 }
 
@@ -1146,6 +1708,10 @@ function commitStratagem(p,s,unit){
       if(fx.k==='objControlMult')unit._ocMult=(unit._ocMult||1)*fx.n;
       if(fx.k==='stickyObjective')stickyObjectiveFor(unit);
       if(fx.k==='extraMove')doExtraMove(unit,fx.dice);
+      if(fx.k==='reanimate'){const n=d3()+(fx.bonus||0)+necronLeaderBonus(unit);reanimateUnit(unit,n);}
+      if(fx.k==='selfBattleshock'){unit.bshock=true;log("kill",`&nbsp;&nbsp;${unit.name} gives in to the Red Thirst — now Battle-shocked.`);}
+      if(fx.k==='toReserves')reserveUnit(unit);
+      if(fx.k==='grantDeepStrike'){unit._grantDeepStrike=true;log("sys",`&nbsp;&nbsp;${unit.name} gains Deep Strike.`);}
     });
   }
   pendingStrat=null;action=null;showActionPanel(false);
@@ -1170,23 +1736,24 @@ function tryMove(u,hx,hy){
   if(cellOccupied(hx,hy,u.id)){updateHint("Cell occupied.");return;}
   if(segBlocked(u.hx,u.hy,hx,hy)){updateHint("A wall or closed hatchway blocks that path.");return;}
   const d=Math.hypot(u.hx-hx,u.hy-hy)*HEX_INCH;
+  const eM=u.m+(u._bfMove||0);   // effective Move incl. Battle Focus (Swift as the Wind / reposition)
   const startER=inER(u);
   const wouldER=units.some(e=>!e.dead&&e.player!==u.player&&Math.hypot(e.hx-hx,e.hy-hy)*HEX_INCH<=ENGAGE_IN&&!segBlocked(e.hx,e.hy,hx,hy));
   if(startER){
-    if(d<=u.m&&!wouldER){u.hx=hx;u.hy=hy;u.fellback=true;u.moved=true;log("sys",`${u.name} Falls Back ${d.toFixed(1)}″.`);
+    if(d<=eM&&!wouldER){u.hx=hx;u.hy=hy;u.fellback=true;u.moved=true;log("sys",`${u.name} Falls Back ${d.toFixed(1)}″.`);
       if(u.bshock){const r=d6();if(r<=2){u.models=Math.max(0,u.models-1);log("kill","&nbsp;&nbsp;Desperate Escape: 1 model lost.");}}}
     else{updateHint("In Engagement Range — Fall Back clear of the enemy, or stay.");return;}
-  }else if(d<=u.m&&!wouldER){u.hx=hx;u.hy=hy;u.moved=true;log("sys",`${u.name} Normal move ${d.toFixed(1)}″.`);}
+  }else if(d<=eM&&!wouldER){u.hx=hx;u.hy=hy;u.moved=true;log("sys",`${u.name} Normal move ${d.toFixed(1)}″.`);}
   else if(!wouldER){
     // needs an Advance — set up an interactive roll
-    if(d>u.m+6){updateHint(`Too far even with a max Advance (need ${d.toFixed(1)}″, max ${u.m+6}″).`);return;}
+    if(d>eM+6){updateHint(`Too far even with a max Advance (need ${d.toFixed(1)}″, max ${eM+6}″).`);return;}
     action={kind:'advance',u,hx,hy,need:d};
     showActionPanel(true);renderAction();return;
   }else{updateHint("Cannot end within Engagement Range.");return;}
   render();renderAll();updateHint();
 }
 function rollAdvance(){
-  const a=action;const adv=d6();const tot=a.u.m+adv;
+  const a=action;const adv=d6();const tot=a.u.m+(a.u._bfMove||0)+adv;
   log("",`${a.u.name} Advance: rolled <b>${adv}</b> → ${tot}″ move.`);logDice([{v:adv}]);
   if(a.need<=tot){a.u.hx=a.hx;a.u.hy=a.hy;a.u.moved=true;a.u.advanced=true;
     log("sys",`&nbsp;&nbsp;Reached destination (${a.need.toFixed(1)}″). No shooting (non-Assault) or charging.`);}
@@ -1198,8 +1765,8 @@ function rollAdvance(){
 function beginShootSelection(u){
   if(u.player!==turn||u.dead){return;}
   if(PHASES[phaseIdx]!=="Shooting"){return;}
-  if(u.advanced&&!u.ranged.some(w=>w.ab.assault)){updateHint(`${u.name} Advanced and has no Assault weapons.`);return;}
-  if(u.fellback){updateHint(`${u.name} Fell Back — cannot shoot.`);return;}
+  if(u.advanced&&!u.ranged.some(w=>w.ab.assault)&&!unitHasElig(u,'eligShootAfterAdvance')){updateHint(`${u.name} Advanced and has no Assault weapons.`);return;}
+  if(u.fellback&&!unitHasElig(u,'eligShootAfterFallBack')){updateHint(`${u.name} Fell Back — cannot shoot.`);return;}
   if(!u.ranged.length){updateHint(`${u.name} has no ranged weapons.`);return;}
   action={kind:'shoot',u,weapon:null,target:null};
   selId=u.id;showActionPanel(true);renderAction();render();
@@ -1221,7 +1788,7 @@ function rollShoot(){
 /* ---- CHARGE: select a legal target, then roll 2D6 ---- */
 function beginChargeSelection(u){
   if(u.player!==turn||u.dead||PHASES[phaseIdx]!=="Charge")return;
-  if(u.advanced||u.fellback){updateHint(`${u.name} can't charge (Advanced/Fell Back).`);return;}
+  if((u.advanced&&!unitHasElig(u,'eligChargeAfterAdvance'))||(u.fellback&&!unitHasElig(u,'eligChargeAfterFallBack'))){updateHint(`${u.name} can't charge (Advanced/Fell Back).`);return;}
   if(u.charged){updateHint(`${u.name} already charged.`);return;}
   if(inER(u)){updateHint(`${u.name} already in combat.`);return;}
   const targets=units.filter(e=>!e.dead&&e.player!==turn&&dist(u,e)<=12&&!segBlocked(u.hx,u.hy,e.hx,e.hy));
@@ -1277,7 +1844,7 @@ function operateHatchways(){
 function scoreObjectives(){
   objectives.forEach(o=>{let oc={1:0,2:0};
     units.filter(u=>!u.dead&&!u.bshock&&Math.hypot(u.hx-o.hx,u.hy-o.hy)<=1.5).forEach(u=>{
-      let ocv=(u.oc+(u._ocBonus||0))*(u._ocMult||1)*u.models;oc[u.player]+=ocv;});
+      let ocv=(u.oc+(u._ocBonus||0)+armyOcBonus(u))*(u._ocMult||1)*u.models;oc[u.player]+=ocv;});
     let holder=oc[1]>oc[2]?1:oc[2]>oc[1]?2:0;
     if(holder===0&&o.sticky)holder=o.sticky;       // sticky: stays held if uncontested
     if(holder){vp[holder]+=1;if(o.sticky&&o.sticky!==holder)o.sticky=holder;else if(!o.sticky&&holder)o.lastHeld=holder;}
@@ -1298,10 +1865,33 @@ function advancePhase(){
   else endTurn();
 }
 function endTurn(){
+  // Gate of Infinity / end-of-opponent's-Fight reserve recall, for the player whose turn is NOT ending
+  maybeGateOfInfinity(turn===1?2:1);
   if(turn===1)turn=2;
   else{scoreObjectives();log("hd",`▼ END R${round} — VP ${PNAME[1]} ${vp[1]} · ${PNAME[2]} ${vp[2]}`);
-    if(round>=MODES[mode].rounds){endGame();return;}round++;turn=1;}
+    ecResolvePledge(1);ecResolvePledge(2);
+    if(round>=MODES[mode].rounds){endGame();return;}round++;turn=1;
+    grantBattleFocus(1);grantBattleFocus(2);allianceOfAgony(1);allianceOfAgony(2);
+    khorneBlessings={1:[],2:[]};khorneDice={1:null,2:null};khorneRolled={1:false,2:false};
+    dgAfflictExtra={1:[],2:[]};
+    // Emperor's Children (Coterie): pledge a kill-count for the new round. Interactive players set this via the panel;
+    // here we auto-pledge a modest 1 so the AI/headless path resolves (the panel can raise it via Unbound Arrogance etc.).
+    [1,2].forEach(pl=>{if(isCoterieArmy(pl))ecMakePledge(pl,1);});
+    grantMiracleRound(1);grantMiracleRound(2);}                 // Adepta Sororitas: +1 Miracle dice at the start of each battle round
   phaseIdx=0;phaseDone=[false,false,false,false,false];beginPhase();renderAll();render();
+}
+function gateMaxFor(p){const sz=MODES[mode].pts; return sz>=2000?4:sz>=1000?3:2;}  // Onslaught/Strike Force/Incursion analogue
+function maybeGateOfInfinity(p){
+  const ar=armyRuleOf(p);
+  if(!ar||!/gate of infinity/i.test(ar.name||''))return;
+  // eligible: on board, not in engagement range, every model has Deep Strike (we treat GK INFANTRY/units with DS as eligible)
+  const elig=units.filter(u=>u.player===p&&!u.dead&&u.deployed&&!inER(u)&&unitHasDeepStrike(u));
+  if(!elig.length)return;
+  const max=gateMaxFor(p);
+  // auto-policy in headless/AI; interactive prompt otherwise is deferred to a button — here we log availability
+  log("sys",`↯ ${PNAME[p]} may use Gate of Infinity (up to ${max} unit${max>1?'s':''} into Reserves).`);
+  // expose for UI: store a pending gate so the player can action it from the panel
+  pendingGate={p,max,ids:elig.map(u=>u.id)};
 }
 function endGame(){
   let name,color,txt;
@@ -1310,6 +1900,53 @@ function endGame(){
   else{name="STALEMATE";color="var(--gold2)";txt=`A draw at ${vp[1]}–${vp[2]}.`;}
   $('victorName').textContent=name;$('victorName').style.color=color;$('victorText').textContent=txt;
   $('modal').classList.add('on');
+}
+
+/* ---- STRATEGIC RESERVES / DEEP STRIKE ----
+   A reserved unit is off-board: inReserve=true, deployed=false, hx/hy=-1.
+   It is alive (dead=false) so it is not counted as destroyed, but it is excluded
+   from combat, targeting and scoring because those filter on board position. */
+function unitHasDeepStrike(u){
+  if(u._grantDeepStrike)return true;
+  return (u.abilities||[]).some(a=>/deep strike/i.test(a.name||'')) || (u.allKw||[]).includes('DEEP STRIKE');
+}
+function reserveUnit(u,silent){
+  if(!u||u.dead||u.inReserve)return false;
+  u.inReserve=true;u.deployed=false;u.hx=-1;u.hy=-1;
+  u.moved=u.advanced=u.fellback=u.charged=false;
+  if(!silent)log("sys",`${u.name} removed to Strategic Reserves.`);
+  return true;
+}
+function reservesOf(p){return units.filter(u=>!u.dead&&u.inReserve&&u.player===p);}
+/* place a reserved unit on the board at hx,hy via Deep Strike (must be >9" from all enemies) */
+function deepStrikePlace(u,hx,hy){
+  if(!u||!u.inReserve)return false;
+  if(cellOccupied(hx,hy)){updateHint("Cell occupied.");return false;}
+  // >9" horizontally from every enemy model
+  const tooClose=units.some(e=>!e.dead&&e.player!==u.player&&e.deployed&&Math.hypot(e.hx-hx,e.hy-hy)*HEX_INCH<9);
+  if(tooClose){updateHint("Deep Strike must be more than 9″ from all enemy units.");return false;}
+  u.inReserve=false;u.deployed=true;u.hx=hx;u.hy=hy;
+  u._setupThisTurn=true;u.moved=true;   // arriving counts as having moved (cannot also Normal-move)
+  log("sys",`${u.name} arrives from Deep Strike.`);
+  // optional bonus move granted on arrival (e.g. "make a D6 move after arriving")
+  if(u._arriveExtraMove){const d=rollExtraMove(u._arriveExtraMove);u._arriveExtraMove=null;if(d)log("sys",`&nbsp;&nbsp;…and may reposition up to ${d}″ (move it now).`);}
+  return true;
+}
+function rollExtraMove(spec){
+  if(spec==='D6')return d6();
+  if(spec==='6')return 6;
+  if(spec==='D3+3')return d3()+3;
+  return 0;
+}
+/* Reinforcements step: at the start of a player's Movement phase, prompt to place reserves. */
+function beginReinforcements(p){
+  const res=reservesOf(p);
+  if(!res.length)return false;
+  // from battle round 2 onward Deep Strike is always allowed; round 1 only if a unit explicitly may (we allow it)
+  action={kind:'deepstrike',p,queue:res.map(u=>u.id),i:0};
+  showActionPanel(true);renderAction();
+  updateHint(`<b>${PNAME[p]}</b>: place Deep Strike reserves (>9″ from enemies), or skip.`);
+  return true;
 }
 
 /* ---- DEPLOYMENT ---- */
@@ -1324,7 +1961,7 @@ function placeUnit(hx,hy){
   u.hx=hx;u.hy=hy;u.deployed=true;log("sys",`${PNAME[p]} deploys ${u.name}.`);
   deployIdx[p]++;deployTurn=deployTurn===1?2:1;
   if(deployIdx[1]>=deployList[1].length&&deployIdx[2]>=deployList[2].length){
-    deploying=false;turn=1;phaseIdx=0;log("hd","◆ ALL FORCES DEPLOYED — BATTLE BEGINS");beginPhase();}
+    deploying=false;turn=1;phaseIdx=0;log("hd","◆ ALL FORCES DEPLOYED — BATTLE BEGINS");grantBattleFocus(1);grantBattleFocus(2);grantResurgence(1);grantResurgence(2);grantFlux(1);grantFlux(2);seedDread(1);seedDread(2);allianceOfAgony(1);allianceOfAgony(2);ecSeedFavoured(1);ecSeedFavoured(2);ecMakePledge(1,1);ecMakePledge(2,1);grantMiracleRound(1);grantMiracleRound(2);beginPhase();}
   selId=null;renderAll();render();updateHint();renderPhases();
 }
 
@@ -1410,9 +2047,599 @@ function renderStratPanel(){
   if(!avail.length)h+='<p class="apNote">No stratagems usable right now (timing or CP).</p>';
   else avail.forEach(s=>{h+=`<button class="stratBtn" data-s="${s.name}"><b>${s.name}</b> <span class="cp">${s.cp}CP</span><span class="ty">${s.type}</span><span class="ds">${s.desc}</span></button>`;});
   // also list the detachment rule + active doctrine for reference
-  h+=`<div class="apSub" style="margin-top:10px">Active</div><p class="apNote">Rule: <b>${det.rule.name}</b>${activeDoctrine[turn]?` · Doctrine: <b>${(det.doctrines||[]).find(d=>d.id===activeDoctrine[turn])?.name||activeDoctrine[turn]}</b>`:''}${oathTarget[turn]?` · Oath set`:''}</p>`;
+  const src=doctrineSource(turn);const activeName=src&&activeDoctrine[turn]?(src.list.find(d=>d.id===activeDoctrine[turn])?.name||activeDoctrine[turn]):null;
+  h+=`<div class="apSub" style="margin-top:10px">Active</div><p class="apNote">Rule: <b>${det.rule.name}</b>${activeName?` · ${src.label}: <b>${activeName}</b>`:''}${oathTarget[turn]?` · Oath set`:''}</p>`;
+  // Space Wolves: a Saga-driven detachment offers a manual completion toggle
+  if(detachUsesSaga(det)){
+    h+=`<button class="stratBtn" id="sagaToggleBtn" style="margin-top:6px"><b>${sagaDone[turn]?'✓ Saga COMPLETED':'◻ Mark Saga completed'}</b><span class="ds">Toggles the Saga upgrade for this detachment (track the tally yourself).</span></button>`;
+  }
+  // Grey Knights: Gate of Infinity recall offered at the start of this player's turn
+  if(pendingGate&&pendingGate.p===turn&&phaseIdx===0){
+    const n=Math.min(pendingGate.max,pendingGate.ids.filter(id=>{const u=units.find(x=>x.id===id);return u&&!u.dead&&u.deployed&&!inER(u);}).length);
+    if(n>0)h+=`<button class="stratBtn" id="gateBtn" style="margin-top:6px"><b>↯ Gate of Infinity</b><span class="cp">0CP</span><span class="ds">Place up to ${n} eligible unit${n>1?'s':''} into Strategic Reserves (re-deploy via Deep Strike next Movement phase).</span></button>`;
+  }
+  // Orks: Call Waaagh! (once per battle, Command phase). Show active status when running.
+  if(isOrkArmy(turn)){
+    if(waaaghActive[turn])h+=`<p class="apNote" style="color:#7fe084;margin-top:6px"><b>WAAAGH! ACTIVE</b> — +1 S/+1 A melee, charge after Advancing, 5+ invuln.</p>`;
+    else if(!waaaghCalled[turn]&&PHASES[phaseIdx]==='Command')h+=`<button class="stratBtn" id="waaaghBtn" style="margin-top:6px;border-color:#3a7d3a"><b>▼ Call the WAAAGH!</b><span class="cp">0CP</span><span class="ds">Once per battle. +1 Strength & Attacks in melee, charge after Advancing, 5+ invulnerable — until your next Command phase.</span></button>`;
+    else if(waaaghCalled[turn])h+=`<p class="apNote" style="margin-top:6px">Waaagh! already called this battle.</p>`;
+  }
+  // Tyranids: Shadow in the Warp (once per battle, Command phase) + Synaptic Imperative (Synaptic Nexus)
+  if(isTyranidArmy(turn)){
+    if(PHASES[phaseIdx]==='Command'&&!shadowUsed[turn]&&hasShadowModel(turn))
+      h+=`<button class="stratBtn" id="shadowBtn" style="margin-top:6px;border-color:#5a3a7d"><b>░ Shadow in the Warp</b><span class="cp">0CP</span><span class="ds">Once per battle. Every enemy unit takes a Battle-shock test (−1 within 6\" of a Synapse model).</span></button>`;
+    else if(shadowUsed[turn])h+=`<p class="apNote" style="margin-top:6px">Shadow in the Warp already unleashed.</p>`;
+    if(det&&/synaptic imperatives/i.test(det.rule.name||'')&&PHASES[phaseIdx]==='Command'){
+      h+=`<div class="apSub" style="margin-top:8px">Synaptic Imperative (each once/battle)</div>`;
+      [['aug','Augmentation','5+ invuln in Synapse'],['surge','Surging Vitality','+1 Advance/Charge in Synapse'],['goad','Goaded to Slaughter','+1 melee Hit in Synapse']].forEach(([id,nm,ds])=>{
+        h+=`<button class="stratBtn synImpBtn" data-imp="${id}" style="margin-top:4px"><b>${synapticImp[turn]===id?'✓ ':''}${nm}</b><span class="ds">${ds}</span></button>`;
+      });
+    }
+  }
+  // T'au Empire: For the Greater Good — mark Spotted targets at the start of the Shooting phase
+  if(isTauArmy(turn)&&PHASES[phaseIdx]==='Shooting'){
+    const n=spotted[turn]?spotted[turn].length:0;
+    h+=`<button class="stratBtn" id="markBtn" style="margin-top:6px;border-color:#3a6d7d"><b>◎ Mark targets (markerlights)</b><span class="cp">0CP</span><span class="ds">Each eligible unit becomes an Observer and marks the closest enemy as Spotted. Guided units get +1 to hit vs Spotted targets (markerlight: also ignores cover).</span></button>`;
+    if(n)h+=`<p class="apNote" style="color:#7fd0c8;margin-top:4px">${n} unit${n!==1?'s':''} Spotted this phase.</p>`;
+  }
+  // Aeldari: Battle Focus token pool + Agile Manoeuvre spends (select a unit first)
+  if(isAsuryaniArmy(turn)){
+    h+=`<div class="apSub" style="margin-top:8px">Battle Focus — ${battleFocus[turn]} token${battleFocus[turn]!==1?'s':''}</div>`;
+    if(battleFocus[turn]>0){
+      const sel=units.find(x=>x.id===selId&&x.player===turn&&!x.dead);
+      h+=`<p class="apNote">${sel?`Spend on <b>${sel.name}</b>:`:'Select one of your units, then spend:'}</p>`;
+      [['swift','Swift as the Wind','+2-3" Move'],['fade','Reposition','D6+1" Normal move'],['star','Star Engines','Vehicle ranged → Assault'],['sudden','Sudden Strike','6" Pile-in/Consolidate'],['flit','Flitting Shadows','No Overwatch this turn']].forEach(([k,nm,ds])=>{
+        h+=`<button class="stratBtn bfBtn" data-bf="${k}" style="margin-top:4px"><b>${nm}</b><span class="cp">1 BF</span><span class="ds">${ds}</span></button>`;
+      });
+    } else h+=`<p class="apNote">No Battle Focus tokens remaining this round.</p>`;
+  }
+  // Genestealer Cults: Resurgence pool (Cult Ambush resurrection is automatic on unit death)
+  if(isGSCArmy(turn)){
+    h+=`<div class="apSub" style="margin-top:8px">Cult Ambush — ${resurgence[turn]} Resurgence point${resurgence[turn]!==1?'s':''}</div>`;
+    h+=`<p class="apNote">When an eligible unit is destroyed, Resurgence is spent automatically to return an identical unit into Cult Ambush (reserves), arriving in a later Movement phase.</p>`;
+  }
+  // Drukhari: Power from Pain — Pain token pool + Empower the selected unit
+  if(isDrukhariArmy(turn)){
+    h+=`<div class="apSub" style="margin-top:8px">Power from Pain — ${painTokens[turn]} Pain token${painTokens[turn]!==1?'s':''}</div>`;
+    h+=`<p class="apNote">Gain 1 at the start of your Command phase, 1 per enemy unit destroyed, and 1 per enemy that fails a Battle-shock test. Spend 1 to Empower a unit (its weapons gain [SUSTAINED HITS 1] this phase).</p>`;
+    if(painTokens[turn]>0){
+      const su=units.find(x=>x.id===selId&&x.player===turn&&!x.dead);
+      const emp=su&&unitEmpowered(su);
+      if(su&&!emp)h+=`<button class="stratBtn painBtn" style="margin-top:4px"><b>✦ Empower ${su.name}</b><span class="cp">1 Pain</span><span class="ds">Activate this unit's Pain abilities until end of phase.</span></button>`;
+      else if(su&&emp)h+=`<p class="apNote" style="color:#e8c">${su.name} is Empowered this phase.</p>`;
+      else h+=`<p class="apNote">Select one of your units to Empower it.</p>`;
+    }
+  }
+  // Leagues of Votann: Prioritised Efficiency — Yield Point pool + current army stance
+  if(isVotannArmy(turn)){
+    const st=votannStance[turn]==='fortify'?'Fortify Takeover':'Hostile Acquisition';
+    h+=`<div class="apSub" style="margin-top:8px">Prioritised Efficiency — ${yieldPoints[turn]}YP</div>`;
+    h+=`<p class="apNote" style="color:${votannStance[turn]==='fortify'?'#8fd':'#fd8'}">Stance: <b>${st}</b>${votannStance[turn]==='fortify'?' (≥7YP: +1 Hit on a held objective, −1 to incoming Wound when S&gt;T)':' (&lt;7YP: +1 Hit vs a target on an objective, re-roll Advance/Charge)'}</p>`;
+    h+=`<p class="apNote">YP are gained automatically at the end of your Command phase (objective control), and the stance flips there at the 7YP threshold. Stratagems that spend YP are resolved with their effect logged.</p>`;
+    h+=`<button class="stratBtn votannFlipBtn" style="margin-top:4px"><b>⚖ Toggle stance (spend 3YP)</b><span class="cp">3YP</span><span class="ds">Mercenary / Adaptable Avarice: manually switch Hostile ↔ Fortify by spending 3YP.</span></button>`;
+  }
+  // Emperor's Children — Pledges to the Dark Prince (Coterie) and Favoured Champions (Slaanesh's Chosen)
+  if(isCoterieArmy(turn)){
+    h+=`<div class="apSub" style="margin-top:8px">Pledges to the Dark Prince — ${pactPoints[turn]} Pact point${pactPoints[turn]!==1?'s':''}</div>`;
+    const tiers=[];if(pactPoints[turn]>=1)tiers.push('1+ re-roll Hit 1');if(pactPoints[turn]>=3)tiers.push('3+ re-roll Wound 1');if(pactPoints[turn]>=5)tiers.push('5+ melee Lethal+Sustained');if(pactPoints[turn]>=7)tiers.push('7+ crit on 5+');
+    h+=`<p class="apNote" style="color:#d9a">Pledge this round: <b>${ecPledge[turn]}</b> · destroyed so far: <b>${ecKills[turn]}</b>. ${tiers.length?'Active: '+tiers.join(', ')+'.':'No tier yet.'}</p>`;
+    h+=`<p class="apNote">At round start you pledge a kill-count (auto 1; raise via Unbound Arrogance). At round end, meeting it banks that many Pact points; missing it costs your Warlord D3 mortal wounds.</p>`;
+    h+=`<button class="stratBtn ecPledgeBtn" data-d="1" style="margin-top:4px"><b>◈ Pledge +1 this round</b><span class="ds">Raise your pledge by 1 (more Pact points if met, more risk if not).</span></button>`;
+  }
+  if(isSlaaneshChosenArmy(turn)){
+    const fc=units.find(u=>u.id===favouredChampions[turn]&&!u.dead);
+    h+=`<div class="apSub" style="margin-top:8px">Internal Rivalries</div>`;
+    h+=`<p class="apNote" style="color:#d9a">Favoured Champions: <b>${fc?fc.name:'—'}</b> (re-rolls the Wound roll; reassigned to the next CHARACTER that destroys an enemy unit).</p>`;
+  }
+  // Adepta Sororitas: Acts of Faith (Miracle dice pool) + Vows (Penitent Host) + Righteous (Champions of Faith)
+  if(isSororitasArmy(turn)){
+    const pool=miracleDice[turn];
+    h+=`<div class="apSub" style="margin-top:8px">Acts of Faith — Miracle dice</div>`;
+    h+=`<p class="apNote" style="color:#fd8">Pool: ${pool.length?'<b>['+pool.join(', ')+']</b>':'<i>empty</i>'} · gain 1 each battle round and 1 whenever one of your units is destroyed.</p>`;
+    if(pool.length){
+      const armed=sororUseMiracleBshock[turn];
+      h+=`<button class="stratBtn sororBshockBtn" style="margin-top:4px"><b>✠ ${armed?'Disarm':'Arm'} Miracle die on Battle-shock</b><span class="ds">Substitute your best Miracle die into this turn's Battle-shock tests (one of the 2D6).</span></button>`;
+    }
+    h+=`<p class="apNote">Other Acts of Faith (substituting Hit/Wound/Damage/Advance/Charge/Save rolls) are resolved against the abstract dice engine; the pool, round/death gains, and the Battle-shock substitution are live.</p>`;
+    const det=detachOf(turn);
+    if(det&&/desperate for redemption/i.test((det.rule&&det.rule.name)||'')){
+      const v=sororVow[turn];
+      h+=`<div class="apSub" style="margin-top:8px">Vow of Atonement${v?': '+({penitent:'Path of the Penitent',absolution:'Absolution in Battle',disgrace:'Death Before Disgrace'}[v]||v):''}</div>`;
+      if(phaseIdx===0){
+        h+=`<div class="vowRow">`;
+        [['penitent','Path of the Penitent (+3\" Move)'],['absolution','Absolution in Battle (charge → +1 A/S melee)'],['disgrace','Death Before Disgrace (fight on death)']].forEach(([id,nm])=>{
+          h+=`<button class="stratBtn sororVowBtn" data-v="${id}" style="margin-top:4px${v===id?';border-color:#caa14a':''}"><b>${nm}</b></button>`;
+        });
+        h+=`</div>`;
+      }
+    }
+    if(det&&/righteous purpose/i.test((det.rule&&det.rule.name)||'')&&phaseIdx===0){
+      h+=`<div class="apSub" style="margin-top:8px">Righteous units (${sororRighteous[turn].length}/3)</div>`;
+      const su=units.find(x=>x.id===selId&&x.player===turn&&!x.dead);
+      if(su)h+=`<button class="stratBtn sororRightBtn" data-u="${su.id}" style="margin-top:4px"><b>✠ ${isRighteous(su)?'Remove Righteous':'Make Righteous'}: ${su.name}</b><span class="ds">+1 Move, +1 Ld, +1 WS/BS (Battle Sisters/Sacresants/Paragons) until your next Command phase.</span></button>`;
+      else h+=`<p class="apNote">Select one of your units to mark it Righteous (up to 3).</p>`;
+    }
+  }
+  // World Eaters: Blessings of Khorne dice-pool (roll 8D6, activate up to two Blessings per round)
+  if(isWorldEatersArmy(turn)){
+    h+=`<div class="apSub" style="margin-top:8px">Blessings of Khorne</div>`;
+    if(!khorneRolled[turn]){
+      h+=`<button class="stratBtn" id="khorneRollBtn" style="margin-top:4px;border-color:#7d2a2a"><b>🎲 Roll 8D6 (Blessings of Khorne)</b><span class="ds">At the start of the battle round, roll eight dice, then spend doubles/triples to activate up to two Blessings for the round.</span></button>`;
+    } else {
+      h+=`<p class="apNote">Dice: ${khorneDice[turn]&&khorneDice[turn].length?khorneDice[turn].join(', '):'(spent)'} · ${khorneBlessings[turn].length}/2 Blessings active</p>`;
+      const avail=khorneDice[turn]?khorneAvailable(khorneDice[turn]):[];
+      KHORNE_BLESSINGS.forEach(b=>{
+        const active=khorneBlessingActive(turn,b.id);
+        const can=avail.includes(b.id)&&khorneBlessings[turn].length<2&&!active;
+        if(active)h+=`<div class="apNote" style="color:#e88">☩ ${b.name} — active</div>`;
+        else if(can)h+=`<button class="stratBtn khBlessBtn" data-kh="${b.id}" style="margin-top:4px"><b>${b.name}</b><span class="cp">dbl ${b.thr}+</span><span class="ds">${b.desc}</span></button>`;
+      });
+      if(khorneBlessings[turn].length>=2)h+=`<p class="apNote">Two Blessings active — roll is locked until next round.</p>`;
+      else if(!avail.length&&!khorneBlessings[turn].length)h+=`<p class="apNote">No doubles available this round.</p>`;
+    }
+  }
+  // Death Guard: Nurgle's Gift — show Contagion Range and the chosen-Plague selector
+  if(isDeathGuardArmy(turn)){
+    const cur=dgChosenPlague(turn);
+    h+=`<div class="apSub" style="margin-top:8px">Nurgle\u2019s Gift — Contagion ${contagionRange()}"</div>`;
+    h+=`<p class="apNote">Enemies within ${contagionRange()}" of your models are Afflicted: -1 Toughness vs your attacks, plus the chosen Plague.</p>`;
+    [['blight','Skullsquirm Blight','Afflicted enemies: -1 to their Hit rolls'],['ague','Rattlejoint Ague','Afflicted enemies: -1 to their Save'],['soulrot','Scabrous Soulrot','Afflicted enemies: -1 Move / Ld / OC']].forEach(([id,nm,ds])=>{
+      h+=`<button class="stratBtn dgPlagueBtn" data-pl="${id}" style="margin-top:4px"><b>${cur===id?'✓ ':''}${nm}</b><span class="ds">${ds}</span></button>`;
+    });
+  }
+  // Chaos Daemons: Shadow of Chaos status + Tzeentch Flux pool
+  if(isDaemonsArmy(turn)){
+    const nml=objectiveControlInZone('nml'), oz=objectiveControlInZone(turn===1?'z2':'z1');
+    const nmlIn=nml.total>0&&nml[turn]*2>=nml.total, ozIn=oz.total>0&&oz[turn]*2>=oz.total;
+    h+=`<div class="apSub" style="margin-top:8px">Shadow of Chaos</div>`;
+    h+=`<p class="apNote">Your deployment zone is always in the Shadow${nmlIn?', No Man\u2019s Land is in the Shadow (you hold its objectives)':''}${ozIn?', the enemy zone is in the Shadow':''}. Daemons in the Shadow heal on a passed Battle-shock test; enemies in it (or near a Greater Daemon) take -1 and risk mortal wounds.</p>`;
+    if(isScintillatingLegion(turn)){
+      h+=`<div class="apSub" style="margin-top:6px">Fates in Flux — ${fluxTokens[turn]} token${fluxTokens[turn]!==1?'s':''}</div>`;
+      if(fluxTokens[turn]>0)h+=`<button class="stratBtn fluxBtn" style="margin-top:4px"><b>↻ Spend Flux (re-roll)</b><span class="ds">Spend one to re-roll a roll; your opponent then gains one Flux token.</span></button>`;
+    }
+  }
+  // Thousand Sons: Cabal of Sorcerers Ritual attempts (Shooting phase), Kindred Sorcery (Command), Flow status
+  if(isThousandSonsArmy(turn)){
+    if(PHASES[phaseIdx]==='Command'){
+      h+=`<div class="apSub" style="margin-top:8px">Kindred Sorcery</div>`;
+      [['imbued','Imbued Manifestation','+6" range to Psychic weapons'],['maelstrom','Psychic Maelstrom','+1 Wound with Psychic weapons'],['wrath','Wrath of the Immaterium','Psychic weapons gain [DEVASTATING WOUNDS]']].forEach(([id,nm,ds])=>{
+        h+=`<button class="stratBtn kindredBtn" data-kd="${id}" style="margin-top:4px"><b>${kindredTSon[turn]===id?'✓ ':''}${nm}</b><span class="ds">${ds}</span></button>`;
+      });
+    }
+    if(PHASES[phaseIdx]==='Shooting'){
+      const left=RITUALS.filter(r=>!ritualsAttempted[turn].includes(r.id));
+      h+=`<div class="apSub" style="margin-top:8px">Cabal of Sorcerers</div>`;
+      if(left.length){
+        h+=`<p class="apNote">Next Ritual: <b>${left[0].name}</b> (Warp Charge ${left[0].wc}). ${left[0].desc}</p>`;
+        h+=`<button class="stratBtn ritualBtn" data-ch="0" style="margin-top:4px"><b>✶ Attempt Ritual (2D6)</b><span class="ds">Roll 2D6 vs the Warp Charge. Doubles risk D3 mortal wounds.</span></button>`;
+        h+=`<button class="stratBtn ritualBtn" data-ch="1" style="margin-top:4px"><b>✶ Attempt + Channel (3D6)</b><span class="ds">Add a third D6 for a higher total — but more chance of a double.</span></button>`;
+      } else h+=`<p class="apNote">All Rituals attempted this turn.</p>`;
+    }
+  }
+  // Chaos Knights: Harbingers of Dread — bank abilities at rounds 1/3/5 (Command phase)
+  if(isChaosKnightsArmy(turn)){
+    h+=`<div class="apSub" style="margin-top:8px">Harbingers of Dread — ${dreadActive[turn].map(dreadName).join(', ')||'none'}</div>`;
+    const canBank=PHASES[phaseIdx]==='Command'&&(round===1||round===3||round===5);
+    if(canBank){
+      h+=`<p class="apNote">Bank a Dread ability (rounds 1/3/5; each once per battle):</p>`;
+      DREAD_ABILITIES.filter(d=>!dreadHas(turn,d.id)).forEach(d=>{
+        h+=`<button class="stratBtn dreadBtn" data-dr="${d.id}" style="margin-top:4px"><b>${d.name}</b><span class="ds">${d.desc}</span></button>`;
+      });
+    } else h+=`<p class="apNote">Dread abilities accumulate at the start of rounds 1, 3 and 5 and last all battle.</p>`;
+  }
+  // Heretic Astartes: Dark Pact toggle (Shooting/Fight phases) + Creations of Bile augment chooser
+  if(isHereticAstartesArmy(turn)){
+    if((PHASES[phaseIdx]==='Shooting'||PHASES[phaseIdx]==='Fight')&&!isRenegadeWarband(turn)){
+      h+=`<div class="apSub" style="margin-top:8px">Dark Pacts</div>`;
+      if(darkPact[turn])h+=`<p class="apNote">A Dark Pact is active — weapons have [LETHAL HITS] and [SUSTAINED HITS 1] this phase.</p>`;
+      else{
+        h+=`<p class="apNote">Take a Leadership test (fail → D3 mortal wounds) to grant your army [LETHAL HITS] + [SUSTAINED HITS 1] this phase.</p>`;
+        h+=`<button class="stratBtn pactBtn" style="margin-top:4px"><b>⛧ Make a Dark Pact</b><span class="ds">Beseech the Dark Gods for lethal boons — at the risk of mortal wounds.</span></button>`;
+      }
+    }
+    if(isCreationsOfBile(turn)&&PHASES[phaseIdx]==='Command'&&round===1&&bileAugments[turn].length===0){
+      h+=`<div class="apSub" style="margin-top:8px">Experimental Augmentations</div><p class="apNote">Select an augmentation for the battle:</p>`;
+      BILE_AUGMENTS.forEach(a=>{h+=`<button class="stratBtn bileBtn" data-bi="${a.id}" style="margin-top:4px"><b>${a.name}</b><span class="ds">${a.desc}</span></button>`;});
+    } else if(isCreationsOfBile(turn)&&bileAugments[turn].length){
+      h+=`<div class="apSub" style="margin-top:8px">Augmentations — ${bileAugments[turn].map(id=>(BILE_AUGMENTS.find(a=>a.id===id)||{}).name).join(', ')}</div>`;
+    }
+  }
   host.innerHTML=h;
-  host.querySelectorAll('.stratBtn').forEach(b=>b.onclick=()=>useStratagem(turn,b.dataset.s));
+  host.querySelectorAll('.stratBtn').forEach(b=>{if(b.id!=='sagaToggleBtn'&&b.id!=='gateBtn'&&b.id!=='waaaghBtn'&&b.id!=='shadowBtn'&&b.id!=='markBtn'&&b.id!=='khorneRollBtn'&&!b.classList.contains('synImpBtn')&&!b.classList.contains('bfBtn')&&!b.classList.contains('khBlessBtn')&&!b.classList.contains('dgPlagueBtn')&&!b.classList.contains('fluxBtn')&&!b.classList.contains('ritualBtn')&&!b.classList.contains('kindredBtn')&&!b.classList.contains('dreadBtn')&&!b.classList.contains('pactBtn')&&!b.classList.contains('bileBtn')&&!b.classList.contains('painBtn')&&!b.classList.contains('votannFlipBtn')&&!b.classList.contains('ecPledgeBtn')&&!b.classList.contains('sororBshockBtn')&&!b.classList.contains('sororVowBtn')&&!b.classList.contains('sororRightBtn'))b.onclick=()=>useStratagem(turn,b.dataset.s);});
+  const sg=$('sagaToggleBtn');if(sg)sg.onclick=()=>{sagaDone[turn]=!sagaDone[turn];log("sys",`${PNAME[turn]} Saga ${sagaDone[turn]?'COMPLETED — upgraded effects active':'reset'}.`);renderStratPanel();};
+  const gb=$('gateBtn');if(gb)gb.onclick=()=>doGateOfInfinity();
+  const wb=$('waaaghBtn');if(wb)wb.onclick=()=>callWaaagh();
+  const shb=$('shadowBtn');if(shb)shb.onclick=()=>unleashShadow();
+  const mkb=$('markBtn');if(mkb)mkb.onclick=()=>doMarkerlights();
+  const khr=$('khorneRollBtn');if(khr)khr.onclick=()=>{rollKhorneBlessings(turn);renderStratPanel();};
+  host.querySelectorAll('.synImpBtn').forEach(b=>b.onclick=()=>pickSynImp(b.dataset.imp));
+  host.querySelectorAll('.bfBtn').forEach(b=>b.onclick=()=>spendBattleFocus(b.dataset.bf));
+  host.querySelectorAll('.khBlessBtn').forEach(b=>b.onclick=()=>activateKhorneBlessing(turn,b.dataset.kh));
+  host.querySelectorAll('.dgPlagueBtn').forEach(b=>b.onclick=()=>{dgPlague[turn]=b.dataset.pl;const nm={blight:'Skullsquirm Blight',ague:'Rattlejoint Ague',soulrot:'Scabrous Soulrot'}[b.dataset.pl];log("sys",`${PNAME[turn]} chooses the Plague: ${nm}.`);renderStratPanel();});
+  host.querySelectorAll('.fluxBtn').forEach(b=>b.onclick=()=>spendFlux());
+  host.querySelectorAll('.ritualBtn').forEach(b=>b.onclick=()=>attemptRitual(b.dataset.ch==='1'));
+  host.querySelectorAll('.kindredBtn').forEach(b=>b.onclick=()=>{kindredTSon[turn]=b.dataset.kd;const nm={imbued:'Imbued Manifestation',maelstrom:'Psychic Maelstrom',wrath:'Wrath of the Immaterium'}[b.dataset.kd];log("sys",`${PNAME[turn]} invokes Kindred Sorcery: ${nm}.`);renderStratPanel();});
+  host.querySelectorAll('.dreadBtn').forEach(b=>b.onclick=()=>bankDread(turn,b.dataset.dr));
+  host.querySelectorAll('.pactBtn').forEach(b=>b.onclick=()=>makeDarkPact());
+  host.querySelectorAll('.bileBtn').forEach(b=>b.onclick=()=>{if(!bileAugments[turn].includes(b.dataset.bi))bileAugments[turn].push(b.dataset.bi);const nm=(BILE_AUGMENTS.find(a=>a.id===b.dataset.bi)||{}).name;log("sys",`${PNAME[turn]} augmentation active: ${nm}.`);renderStratPanel();});
+  host.querySelectorAll('.painBtn').forEach(b=>b.onclick=()=>empowerUnit());
+  host.querySelectorAll('.votannFlipBtn').forEach(b=>b.onclick=()=>votannFlipStance());
+  host.querySelectorAll('.ecPledgeBtn').forEach(b=>b.onclick=()=>ecRaisePledge(parseInt(b.dataset.d||'1',10)));
+  host.querySelectorAll('.sororBshockBtn').forEach(b=>b.onclick=()=>sororToggleMiracleBshock());
+  host.querySelectorAll('.sororVowBtn').forEach(b=>b.onclick=()=>chooseSororVow(b.dataset.v));
+  host.querySelectorAll('.sororRightBtn').forEach(b=>b.onclick=()=>toggleRighteous(b.dataset.u));
+}
+function doGateOfInfinity(){
+  if(!pendingGate||pendingGate.p!==turn)return;
+  let n=0;
+  for(const id of pendingGate.ids){
+    if(n>=pendingGate.max)break;
+    const u=units.find(x=>x.id===id);
+    if(u&&!u.dead&&u.deployed&&!inER(u)){reserveUnit(u);n++;}
+  }
+  log("sys",`↯ ${PNAME[turn]} Gates ${n} unit${n!==1?'s':''} into Reserves.`);
+  pendingGate=null;renderAll();render();renderStratPanel();updateHint();
+}
+function isOrkArmy(p){const fd=factionDataFor(p);const ar=armyRuleOf(p);return /orks/i.test((FACTIONS[pFaction[p]]||{}).name||'')||/waaagh/i.test((ar&&ar.name)||'');}
+function callWaaagh(){
+  if(waaaghCalled[turn]||!isOrkArmy(turn))return;
+  waaaghCalled[turn]=true;waaaghActive[turn]=true;waaaghTurnLeft[turn]=1;
+  log("hd",`▼▼ ${PNAME[turn].toUpperCase()} CALLS A WAAAGH! ▼▼`);
+  log("sys","Charge after Advancing · +1 Strength & +1 Attack in melee · 5+ invulnerable save — until your next Command phase.");
+  renderAll();render();renderStratPanel();updateHint();
+}
+function unleashShadow(){
+  if(shadowUsed[turn]||!isTyranidArmy(turn)||!hasShadowModel(turn))return;
+  shadowUsed[turn]=true;
+  log("hd",`░░ ${PNAME[turn].toUpperCase()} UNLEASHES THE SHADOW IN THE WARP ░░`);
+  const ep=turn===1?2:1;
+  units.filter(u=>u.player===ep&&!u.dead&&u.deployed).forEach(u=>{
+    const near=units.some(s=>s.player===turn&&!s.dead&&unitHasKw(s,'SYNAPSE')&&dist(s,u)<=6);
+    const r=d6()+d6()-(near?1:0);const pass=r>=u.ld;
+    log("",`Shadow Battle-shock ${u.name}: <b>${r}</b> vs LD${u.ld}${near?' (−1)':''} — ${pass?'<span class="save">PASS</span>':'<span class="kill">FAIL · shocked</span>'}`);
+    if(!belowHalf(u))u.bshock=!pass;else u.bshock=u.bshock||!pass;
+  });
+  renderAll();render();renderStratPanel();updateHint();
+}
+function pickSynImp(id){
+  // Synaptic Nexus: choose a Synaptic Imperative for the battle round (each once per battle)
+  synapticImp[turn]=id;
+  const nm={aug:'Synaptic Augmentation (5+ invuln)',surge:'Surging Vitality (+1 Advance/Charge)',goad:'Goaded to Slaughter (+1 melee Hit)'}[id];
+  log("sys",`${PNAME[turn]} Synaptic Imperative: ${nm}.`);
+  renderStratPanel();render();
+}
+function isTauArmy(p){return /t.au empire/i.test((FACTIONS[pFaction[p]]||{}).name||'');}
+function isAsuryaniArmy(p){const ar=armyRuleOf(p);return /aeldari/i.test((FACTIONS[pFaction[p]]||{}).name||'')||/battle focus/i.test((ar&&ar.name)||'');}
+function isGSCArmy(p){const ar=armyRuleOf(p);return /genestealer cults/i.test((FACTIONS[pFaction[p]]||{}).name||'')||/cult ambush/i.test((ar&&ar.name)||'');}
+function isWorldEatersArmy(p){const ar=armyRuleOf(p);return /world eaters/i.test((FACTIONS[pFaction[p]]||{}).name||'')||/blessings of khorne/i.test((ar&&ar.name)||'');}
+// The six Blessings of Khorne and the double/triple threshold each requires.
+const KHORNE_BLESSINGS=[
+  {id:'bloodlust',name:'Unbridled Bloodlust',thr:1,desc:'Re-roll Charge rolls.'},
+  {id:'rage',name:'Rage-fuelled Invigoration',thr:2,desc:'6" Pile-in/Consolidate.'},
+  {id:'carnage',name:'Total Carnage',thr:3,desc:'Destroyed-in-melee models fight on (4+).'},
+  {id:'martial',name:'Martial Excellence',thr:4,desc:'Melee gain [SUSTAINED HITS 1].'},
+  {id:'warp',name:'Warp Blades',thr:5,desc:'Melee gain [LETHAL HITS].'},
+  {id:'decap',name:'Decapitating Strikes',thr:6,desc:'Melee gain [DEVASTATING WOUNDS] vs INFANTRY.'},
+];
+function khorneBlessingActive(p,id){return khorneBlessings[p]&&khorneBlessings[p].includes(id);}
+// Given an array of dice values, which Blessing thresholds are satisfiable (a double/triple of thr-or-higher exists)?
+function khorneAvailable(dice){
+  const avail=[];
+  KHORNE_BLESSINGS.forEach(b=>{
+    const n=dice.filter(d=>d>=b.thr).length;   // dice at or above threshold can pair to form a "double of thr or higher"
+    if(n>=2)avail.push(b.id);
+  });
+  return avail;
+}
+function rollKhorneBlessings(p){
+  if(!isWorldEatersArmy(p)||khorneRolled[p])return;
+  const dice=[];for(let i=0;i<8;i++)dice.push(d6());
+  khorneDice[p]=dice;khorneRolled[p]=true;
+  log("hd",`☩ ${PNAME[p]} BLESSINGS OF KHORNE — rolled: ${dice.join(', ')}`);
+  logDice(dice.map(v=>({v})));
+  const avail=khorneAvailable(dice);
+  if(!avail.length)log("sys","No doubles available — no Blessings can be activated.");
+}
+function activateKhorneBlessing(p,id){
+  if(!isWorldEatersArmy(p)||!khorneDice[p])return;
+  if(khorneBlessings[p].length>=2){log("sys","Already two Blessings active this round.");return;}
+  if(khorneBlessingActive(p,id)){return;}
+  const b=KHORNE_BLESSINGS.find(x=>x.id===id);if(!b)return;
+  // consume two dice at or above the threshold
+  const idxs=[];khorneDice[p].forEach((d,i)=>{if(d>=b.thr&&idxs.length<2)idxs.push(i);});
+  if(idxs.length<2){log("sys",`Not enough dice (need a double ${b.thr}+) for ${b.name}.`);return;}
+  idxs.sort((a,c)=>c-a).forEach(i=>khorneDice[p].splice(i,1));
+  khorneBlessings[p].push(id);
+  log("hd",`☩ ${b.name} ACTIVE — ${b.desc}`);
+  renderStratPanel&&renderStratPanel();
+}
+function resurgenceStart(){const sz=MODES[mode].pts;return sz>=2000?14:sz>=1000?10:6;}  // Onslaught/Strike Force/Incursion
+function grantResurgence(p){
+  if(!isGSCArmy(p)){resurgence[p]=0;return;}
+  let n=resurgenceStart();
+  // enhancement bonuses to starting Resurgence (Deeds That Speak to the Masses +2)
+  units.filter(u=>u.player===p&&!u.dead&&u.enh==='Deeds That Speak to the Masses').forEach(()=>n+=2);
+  resurgence[p]=n;
+  log("sys",`${PNAME[p]} begins with ${n} Resurgence point${n!==1?'s':''} (Cult Ambush).`);
+}
+// Cost in Resurgence points to bring back a unit of this template, scaled to its max model count.
+function resurgenceCost(u){
+  const big=u.maxModels>=10;
+  const nm=(u.name||'').toLowerCase();
+  if(/aberrant/.test(nm))return big?8:4;
+  if(/acolyte|metamorph/.test(nm))return big?4:2;
+  if(/jackal/.test(nm))return big?6:2;
+  if(/neophyte/.test(nm))return u.maxModels>=20?6:3;
+  if(/purestrain|genestealer/.test(nm))return big?6:2;
+  return big?5:3; // generic fallback
+}
+function unitCultAmbushEligible(u){
+  // every model in the unit must have the Cult Ambush ability — modelled as GSC INFANTRY/MOUNTED battleline-ish
+  return isGSCArmy(u.player)&&unitHasKw(u,'GENESTEALER CULTS')&&!unitHasKw(u,'CHARACTER')&&!unitHasKw(u,'VEHICLE');
+}
+function cultAmbushResurrect(u){
+  // On a GSC unit's destruction, spend Resurgence to recreate an identical unit in Cult Ambush (reserves).
+  if(!u||!u.dead||!unitCultAmbushEligible(u))return;
+  const cost=resurgenceCost(u);
+  if(resurgence[u.player]<cost)return;
+  resurgence[u.player]-=cost;
+  const nu=newUnit(u.tpl,u.player);
+  nu.enh=null;nu.inReserve=true;nu.deployed=false;nu.dead=false;nu.hx=-1;nu.hy=-1;nu._cultAmbush=true;
+  units.push(nu);
+  log("hd",`✥ CULT AMBUSH — ${u.name} returns from the shadows (${cost} Resurgence, ${resurgence[u.player]} left).`);
+}
+function battleFocusBase(){const sz=MODES[mode].pts;return sz>=2000?6:sz>=1000?4:2;}  // Onslaught/Strike Force/Incursion
+// ---- Drukhari: Power from Pain ----
+function isDrukhariArmy(p){const ar=armyRuleOf(p);return /drukhari/i.test((FACTIONS[pFaction[p]]||{}).name||'')||/power from pain|alliance of agony|rain of cruelty|combat drugs|stitchflesh|murderous agenda|callous competition/i.test((ar&&ar.name)||'');}
+function gainPain(p,n,why){
+  if(!isDrukhariArmy(p)||n<=0)return;
+  painTokens[p]+=n;
+  log("sys",`${PNAME[p]} gains ${n} Pain token${n!==1?'s':''}${why?` (${why})`:''} — ${painTokens[p]} in pool.`);
+}
+function painOnEnemyDeath(u){
+  // u is the unit that just died; its controller's OPPONENT (the killer) gains a Pain token if Drukhari.
+  if(!u)return;const ep=u.player===1?2:1;
+  if(isDrukhariArmy(ep))gainPain(ep,1,'enemy destroyed');
+}
+function empowerUnit(){
+  // Spend 1 Pain token to Empower the selected unit for the phase (its Pain abilities take effect).
+  if(!isDrukhariArmy(turn)){log("sys","Only Drukhari can Empower units.");return;}
+  if(painTokens[turn]<=0){log("sys","No Pain tokens to spend.");return;}
+  const u=units.find(x=>x.id===selId&&x.player===turn&&!x.dead);
+  if(!u){log("sys","Select one of your units first, then Empower it.");return;}
+  if(empowered[turn].includes(u.id)){log("sys",`${u.name} is already Empowered this phase.`);return;}
+  painTokens[turn]--;empowered[turn].push(u.id);
+  log("hd",`✦ ${u.name} is Empowered (1 Pain token spent, ${painTokens[turn]} left) — Pain abilities active this phase.`);
+  renderAll();render();renderStratPanel();updateHint();
+}
+function unitEmpowered(u){return !!u&&isDrukhariArmy(u.player)&&empowered[u.player]&&empowered[u.player].includes(u.id);}
+function allianceOfAgony(p){
+  // Realspace Raiders: start with up to 6 Pain tokens (2 per Archon+Kabalite / Succubus+Wych / Haemonculus+Wrack combo).
+  // Detachment composition isn't tracked, so grant a flat starting pool to a Realspace Raiders Drukhari army.
+  if(!isDrukhariArmy(p))return;
+  const det=detachOf(p);
+  if(det&&/alliance of agony/i.test((det.rule&&det.rule.name)||'')){gainPain(p,6,'Alliance of Agony');}
+}
+// ---- Leagues of Votann: Prioritised Efficiency (Yield Points + Hostile Acquisition / Fortify Takeover) ----
+function isVotannArmy(p){const ar=armyRuleOf(p);return /leagues of votann|votann/i.test((FACTIONS[pFaction[p]]||{}).name||'')||/prioritised efficiency|martial leverage|assailed from every angle|fury from the d.?lve|mobile sensor relays|optimal application|methodical annihilation|ruthless reinvestment/i.test((ar&&ar.name)||'');}
+function gainYP(p,n,why){
+  if(!isVotannArmy(p)||n<=0)return;
+  yieldPoints[p]+=n;
+  log("sys",`${PNAME[p]} gains ${n}YP${why?` (${why})`:''} — ${yieldPoints[p]}YP held.`);
+}
+function ypOnEnemyDeath(u){
+  // Needgaârd Martial Leverage / Mercenary Prospector: the killer (dying unit's opponent) gains YP if Votann.
+  if(!u)return;const ep=u.player===1?2:1;
+  if(!isVotannArmy(ep))return;
+  const det=detachOf(ep);
+  if(det&&/martial leverage/i.test((det.rule&&det.rule.name)||''))gainYP(ep,1,'enemy destroyed (Martial Leverage)');
+}
+function votannStanceFor(p){return isVotannArmy(p)?votannStance[p]:null;}
+// YP gain from objective control at the END of a player's Command phase, then re-evaluate the stance threshold.
+function votannCommandYield(p){
+  if(!isVotannArmy(p))return;
+  const own='z'+p;                                   // this player's own deployment zone id
+  const inOwn=objectiveControlInZone(own)[p];
+  // Tally objectives this player controls that are NOT in their own deployment zone, across the other two zones.
+  const zones=['z1','z2','nml'].filter(z=>z!==own);
+  let outZone=0; zones.forEach(z=>{outZone+=objectiveControlInZone(z)[p];});
+  // Opponent's total controlled objectives (all zones) for the "more than opponent" check.
+  const ep=p===1?2:1; let mine=inOwn+outZone, theirs=0;
+  ['z1','z2','nml'].forEach(z=>{theirs+=objectiveControlInZone(z)[ep];});
+  let gain=0;
+  if(inOwn>=1)gain+=1;                                // hold an objective in your own zone
+  if(round>=2){
+    if(outZone>=1)gain+=1;                            // one or more not-in-zone
+    if(outZone>=2)gain+=1;                            // two or more not-in-zone
+    if(mine>theirs)gain+=1;                           // more than the opponent
+  }
+  // Hearthfyre Optimal Application: +1 YP per not-in-zone objective held with an IRON-MASTER/MEMNYR STRATEGIST in range (max 2).
+  const det=detachOf(p);
+  if(det&&/optimal application/i.test((det.rule&&det.rule.name)||'')){
+    let bonus=0;
+    objectives.forEach(o=>{
+      if(zoneOfCell(o.hx,o.hy)===own)return;
+      const ctrl=objectiveControlledBy(o,p); if(!ctrl)return;
+      const near=units.some(u=>u.player===p&&!u.dead&&u.deployed&&!u.inReserve&&(unitHasKw(u,'IRON-MASTER')||unitHasKw(u,'MEMNYR STRATEGIST'))&&Math.hypot(o.hx-u.hx,o.hy-u.hy)<=1.5);
+      if(near)bonus++;
+    });
+    if(bonus>0)gainYP(p,Math.min(2,bonus),'Optimal Application');
+  }
+  if(gain>0)gainYP(p,gain,'objective control');
+  updateVotannStance(p);
+}
+function objectiveControlledBy(o,p){
+  let oc={1:0,2:0};
+  units.forEach(u=>{if(!u.dead&&u.deployed&&!u.inReserve&&Math.hypot(o.hx-u.hx,o.hy-u.hy)<=1.5)oc[u.player]+=ocOf(u);});
+  return oc[p]>oc[p===1?2:1]&&oc[p]>0;
+}
+function updateVotannStance(p){
+  if(!isVotannArmy(p))return;
+  const det=detachOf(p);
+  // Mercenary Oathband (Ruthless Reinvestment): no auto-flip; stance only changes via spending 3YP (modelled as a manual toggle, default stays hostile).
+  if(det&&/ruthless reinvestment/i.test((det.rule&&det.rule.name)||''))return;
+  const next=yieldPoints[p]>=7?'fortify':'hostile';
+  if(votannStance[p]!==next){votannStance[p]=next;log("sys",`${PNAME[p]}: army stance is now ${next==='fortify'?'Fortify Takeover':'Hostile Acquisition'} (${yieldPoints[p]}YP).`);}
+}
+function unitAssailedBy(u,attacker){
+  // is u (a target) assailed by the attacker's player?
+  return !!u&&!!attacker&&isVotannArmy(attacker.player)&&assailed[attacker.player]&&assailed[attacker.player].includes(u.id);
+}
+function votannFlipStance(){
+  if(!isVotannArmy(turn)){log("sys","Only Leagues of Votann can switch stance.");return;}
+  if(yieldPoints[turn]<3){log("sys","Need 3YP to switch stance.");return;}
+  yieldPoints[turn]-=3;
+  votannStance[turn]=votannStance[turn]==='fortify'?'hostile':'fortify';
+  log("hd",`⚖ ${PNAME[turn]} spends 3YP to switch stance → ${votannStance[turn]==='fortify'?'Fortify Takeover':'Hostile Acquisition'} (${yieldPoints[turn]}YP left).`);
+  renderAll();render();renderStratPanel();updateHint();
+}
+// ---- Emperor's Children: Thrill Seekers + Pledges to the Dark Prince + Favoured Champions ----
+function isECArmy(p){const ar=armyRuleOf(p);return /emperor.?s children/i.test((FACTIONS[pFaction[p]]||{}).name||'')||/thrill seekers|quicksilver grace|exquisite swordsmanship|mechanised murder|daemonic empowerment|pledges to the dark prince|internal rivalries|sensational performance/i.test((ar&&ar.name)||'');}
+function isCoterieArmy(p){const det=detachOf(p);return isECArmy(p)&&det&&/pledges to the dark prince/i.test((det.rule&&det.rule.name)||'');}
+function isSlaaneshChosenArmy(p){const det=detachOf(p);return isECArmy(p)&&det&&/internal rivalries/i.test((det.rule&&det.rule.name)||'');}
+// At the start of a battle round, the Coterie player pledges how many enemy units they'll destroy this round.
+function ecMakePledge(p,n){
+  if(!isCoterieArmy(p))return;
+  ecPledge[p]=Math.max(0,n|0);ecKills[p]=0;ecPledged[p]=true;
+  log("hd",`◈ ${PNAME[p]} pledges ${ecPledge[p]} enemy unit${ecPledge[p]!==1?'s':''} to the Dark Prince this round.`);
+}
+// At the end of a battle round: if kills >= pledge, bank that many Pact points; else Warlord suffers D3 mortal wounds.
+function ecResolvePledge(p){
+  if(!isCoterieArmy(p)||!ecPledged[p])return;
+  if(ecPledge[p]>0&&ecKills[p]>=ecPledge[p]){
+    pactPoints[p]+=ecPledge[p];
+    log("hd",`◈ ${PNAME[p]} fulfilled the pledge (${ecKills[p]}/${ecPledge[p]} destroyed) — gains ${ecPledge[p]} Pact point${ecPledge[p]!==1?'s':''} (${pactPoints[p]} total).`);
+  } else {
+    const wl=units.find(u=>u.player===p&&!u.dead&&u.isWarlord)||units.find(u=>u.player===p&&!u.dead&&unitHasKw(u,'CHARACTER'));
+    log("hd",`◈ ${PNAME[p]} failed the pledge (${ecKills[p]}/${ecPledge[p]}) — no Pact points; Warlord suffers D3 mortal wounds.`);
+    if(wl)applyMortals(wl,d3());
+  }
+  ecPledged[p]=false;ecKills[p]=0;ecPledge[p]=0;
+}
+function ecRaisePledge(n){
+  if(!isCoterieArmy(turn)){log("sys","Only a Coterie of the Conceited army pledges to Slaanesh.");return;}
+  if(!ecPledged[turn]){ecMakePledge(turn,n);}
+  else{ecPledge[turn]+=n;log("hd",`◈ ${PNAME[turn]} raises the pledge to ${ecPledge[turn]} (destroyed so far: ${ecKills[turn]}).`);}
+  renderAll();render();renderStratPanel();updateHint();
+}
+function ecPactTier(p,thr){return isCoterieArmy(p)&&pactPoints[p]>=thr;}// Favoured Champions (Slaanesh's Chosen): the army's reroll-Wound marker, set to the Warlord's unit at battle start.
+function ecSeedFavoured(p){
+  if(!isSlaaneshChosenArmy(p))return;
+  const wl=units.find(u=>u.player===p&&!u.dead&&u.isWarlord&&unitHasKw(u,'CHARACTER'))||units.find(u=>u.player===p&&!u.dead&&unitHasKw(u,'CHARACTER'));
+  if(wl){favouredChampions[p]=wl.id;log("sys",`${PNAME[p]}: ${wl.name} is the army's Favoured Champions.`);}
+}
+function isFavouredChampions(u){return !!u&&isSlaaneshChosenArmy(u.player)&&favouredChampions[u.player]===u.id;}
+// Per-enemy-death EC hook: tally the killer's kills for the pledge, and (Slaanesh's Chosen) hand Favoured Champions to a CHARACTER killer.
+function ecOnEnemyDeath(victim,killer){
+  if(!victim)return;const ep=victim.player===1?2:1;
+  if(isCoterieArmy(ep)&&ecPledged[ep])ecKills[ep]++;
+  if(killer&&isSlaaneshChosenArmy(killer.player)&&unitHasKw(killer,'CHARACTER')&&!killer.dead){
+    if(favouredChampions[killer.player]!==killer.id){favouredChampions[killer.player]=killer.id;log("sys",`${killer.name} becomes ${PNAME[killer.player]}'s Favoured Champions.`);}
+  }
+}
+// ---- Adepta Sororitas: Acts of Faith (Miracle dice pool) + Vows of Atonement + Righteous units ----
+function isSororitasArmy(p){const ar=armyRuleOf(p);return /adepta sororitas|sororitas/i.test((FACTIONS[pFaction[p]]||{}).name||'')||/acts of faith|blood of martyrs|desperate for redemption|fervent purgation|sacred rites|righteous purpose/i.test((ar&&ar.name)||'');}
+// Gain n Miracle dice, each rolled (value 1-6). Optionally force a value (some enhancements grant a 6).
+function gainMiracle(p,n,why,forceVal){
+  if(!isSororitasArmy(p)||n<=0)return;
+  const vals=[];for(let i=0;i<n;i++){const v=forceVal||d6();miracleDice[p].push(v);vals.push(v);}
+  log("sys",`${PNAME[p]} gains ${n} Miracle dice [${vals.join(', ')}] — pool: [${miracleDice[p].join(', ')}].`);
+}
+function grantMiracleRound(p){ if(isSororitasArmy(p))gainMiracle(p,1,'start of battle round'); }   // +1 each battle round
+function miracleOnDeath(u){ if(u&&isSororitasArmy(u.player))gainMiracle(u.player,1,`${u.name} destroyed`); } // +1 per ASORITAS unit destroyed
+// Spend (remove) the best Miracle die from the pool and return its value, or null if empty. Used for substitutions.
+function spendBestMiracle(p){
+  if(!miracleDice[p]||!miracleDice[p].length)return null;
+  let bi=0;for(let i=1;i<miracleDice[p].length;i++)if(miracleDice[p][i]>miracleDice[p][bi])bi=i;
+  return miracleDice[p].splice(bi,1)[0];
+}
+// Player toggles intent to spend a Miracle die on this turn's Battle-shock tests (substitutes one of the 2D6).
+function sororToggleMiracleBshock(){
+  if(!isSororitasArmy(turn)){log("sys","Only Adepta Sororitas have Miracle dice.");return;}
+  if(!miracleDice[turn].length){log("sys","No Miracle dice in the pool.");return;}
+  sororUseMiracleBshock[turn]=!sororUseMiracleBshock[turn];
+  log("sys",`Acts of Faith: Miracle-dice substitution on Battle-shock tests ${sororUseMiracleBshock[turn]?'ARMED':'disarmed'} for this turn.`);
+  renderAll();render();renderStratPanel();updateHint();
+}
+// Penitent Host Vows of Atonement (round pick) — combat-relevant ones flow via the sororVow* conditions.
+function sororVowFor(p){return isSororitasArmy(p)?sororVow[p]:null;}
+function chooseSororVow(id){
+  if(!isSororitasArmy(turn))return;
+  sororVow[turn]=id;
+  const nm={penitent:'The Path of the Penitent',absolution:'Absolution in Battle',disgrace:'Death Before Disgrace'}[id]||id;
+  log("hd",`✠ ${PNAME[turn]} swears the Vow: ${nm} (until the next battle round).`);
+  renderAll();render();renderStratPanel();updateHint();
+}
+// Champions of Faith — Righteous units (Command-phase pick of up to 3); buffs flow via the selfRighteous condition.
+function isRighteous(u){return !!u&&isSororitasArmy(u.player)&&sororRighteous[u.player].includes(u.id);}
+function toggleRighteous(uid){
+  if(!isSororitasArmy(turn))return;
+  const arr=sororRighteous[turn];const i=arr.indexOf(uid);
+  if(i>=0)arr.splice(i,1);
+  else{if(arr.length>=3){log("sys","Up to 3 units can be Righteous.");return;}arr.push(uid);}
+  const u=units.find(x=>x.id===uid);if(u)log("sys",`${u.name} ${arr.includes(uid)?'is now Righteous':'is no longer Righteous'} (${arr.length}/3).`);
+  renderAll();render();renderStratPanel();updateHint();
+}
+function grantBattleFocus(p){
+  // Start of battle round: refresh the Battle Focus pool (unspent tokens are lost). +1 for Warhost's
+  // Martial Grace, +1 if a Timeless Strategist enhancement is present on the army.
+  if(!isAsuryaniArmy(p)){battleFocus[p]=0;return;}
+  let n=battleFocusBase();
+  const det=detachOf(p);
+  if(det&&/martial grace/i.test((det.rule&&det.rule.name)||''))n+=1;
+  if(units.some(u=>u.player===p&&!u.dead&&u.enh==='Timeless Strategist'))n+=1;
+  battleFocus[p]=n;
+  log("sys",`${PNAME[p]} receives ${n} Battle Focus token${n!==1?'s':''} this round.`);
+}
+function spendBattleFocus(kind){
+  // Spend one Battle Focus token to perform an Agile Manoeuvre on the selected unit (or army-wide note).
+  if(!isAsuryaniArmy(turn)||battleFocus[turn]<=0)return;
+  const u=units.find(x=>x.id===selId&&x.player===turn&&!x.dead);
+  battleFocus[turn]--;
+  const grace=detachOf(turn)&&/martial grace/i.test((detachOf(turn).rule&&detachOf(turn).rule.name)||'');
+  if(kind==='swift'){const bonus=grace?3:2;if(u){u._bfMove=(u._bfMove||0)+bonus;}log("sys",`Swift as the Wind: +${bonus}" Move${u?` to ${u.name}`:''} (token spent).`);}
+  else if(kind==='star'){if(u)u._bfAssault=true;log("sys",`Star Engines: ${u?u.name+"'s":'unit\u2019s'} ranged weapons gain [ASSAULT] (token spent).`);}
+  else if(kind==='sudden'){if(u)u._bfSudden=true;log("sys",`Sudden Strike: bigger Pile-in/Consolidate${u?` for ${u.name}`:''} (token spent).`);}
+  else if(kind==='fade'){const d=d6()+(grace?1:0)+1;log("sys",`Fade Back / reposition: up to ${d}" Normal move${u?` for ${u.name}`:''} (token spent).`);if(u){u._bfMove=(u._bfMove||0)+d;}}
+  else if(kind==='flit'){log("sys",`Flitting Shadows: no Overwatch against ${u?u.name:'the unit'} this turn (token spent).`);}
+  renderAll();render();renderStratPanel();updateHint();
+}
+function unitIsObserverCapable(u){
+  // For the Greater Good ability: model the army-wide ability as available to all T'au EMPIRE units
+  // (excluding battle-shocked); MARKER DRONE / MARKERLIGHT units additionally grant Ignores Cover.
+  return !!u&&!u.dead&&u.deployed&&!u.bshock&&!inER(u)&&isTauArmy(u.player);
+}
+function doMarkerlights(){
+  // T'au For the Greater Good: each eligible unit acts as an Observer, marking the closest visible
+  // enemy as Spotted. MARKERLIGHT observers add the cover-ignoring flag. Resets each Shooting phase.
+  if(!isTauArmy(turn)||PHASES[phaseIdx]!=='Shooting')return;
+  spotted[turn]=[];spottedML[turn]=[];
+  const ep=turn===1?2:1;
+  const enemies=units.filter(u=>u.player===ep&&!u.dead&&u.deployed);
+  if(!enemies.length){log("sys","No enemy units to mark.");return;}
+  const observers=units.filter(u=>u.player===turn&&unitIsObserverCapable(u));
+  let marks=0;
+  observers.forEach(o=>{
+    // closest enemy to this observer that isn't already spotted (each enemy markable once)
+    const avail=enemies.filter(e=>!spotted[turn].includes(e.id));
+    const pool=avail.length?avail:enemies;
+    let best=null,bd=1e9;pool.forEach(e=>{const d=dist(o,e);if(d<bd){bd=d;best=e;}});
+    if(best&&!spotted[turn].includes(best.id)){
+      spotted[turn].push(best.id);
+      if(unitHasKw(o,'MARKERLIGHT'))spottedML[turn].push(best.id);
+      marks++;
+    }
+  });
+  log("hd",`◎ ${PNAME[turn].toUpperCase()} MARKS ${marks} TARGET${marks!==1?'S':''} (markerlights)`);
+  log("sys","Guided units gain +1 to hit (BS) vs Spotted targets; markerlight-spotted also ignore cover.");
+  renderAll();render();renderStratPanel();updateHint();
+}
+function detachUsesSaga(det){
+  if(!det)return false;
+  const scan=arr=>(arr||[]).some(fx=>fx&&typeof fx.cond==='string'&&fx.cond.includes('sagaCompleted'));
+  if(det.rule&&scan(det.rule.fx))return true;
+  if(det.doctrines&&det.doctrines.some(d=>scan(d.fx)))return true;
+  return false;
 }
 function renderAction(){
   const host=$('actionBody');if(!host||!action)return;
@@ -1451,9 +2678,10 @@ function renderAction(){
     enemies.forEach(t=>{h+=`<button class="apTgt" data-oath="${t.id}">${t.name} <span>T${t.t} Sv${t.sv}+ · ${t.models} models</span></button>`;});
     h+=`</div>`;
   }else if(a.kind==='doctrine'){
-    const det=detachOf(turn);
-    h=`<div class="apTitle">${det.rule.name.toUpperCase()} — ${PSHORT[turn]}</div><div class="apSub">Select a doctrine for this round</div><div class="apTargets">`;
-    det.doctrines.forEach(d=>{const used=usedDoctrines[turn].includes(d.id);
+    const src=doctrineSource(turn);
+    const title=src?src.label.toUpperCase():'DOCTRINE';
+    h=`<div class="apTitle">${title} — ${PSHORT[turn]}</div><div class="apSub">Select a ${src?src.label.toLowerCase():'doctrine'}</div><div class="apTargets">`;
+    (src?src.list:[]).forEach(d=>{const used=usedDoctrines[turn].includes(d.id);
       h+=`<button class="apTgt${used?' used':''}" data-doc="${d.id}">${d.name}${used?' (used)':''} <span>${d.desc}</span></button>`;});
     h+=`</div><button class="btn apCancel" id="apCancelBtn">Skip</button>`;
   }else if(a.kind==='stratTarget'){
@@ -1461,6 +2689,12 @@ function renderAction(){
     h=`<div class="apTitle">✦ ${s.name} (${s.cp}CP)</div><p class="apNote">${s.desc}</p><div class="apSub">Choose target unit</div><div class="apTargets">`;
     eligible.forEach(t=>{h+=`<button class="apTgt" data-strat="${t.id}">${t.name}</button>`;});
     h+=`</div><button class="btn apCancel" id="apCancelBtn">Cancel</button>`;
+  }else if(a.kind==='deepstrike'){
+    const u=units.find(x=>x.id===a.queue[a.i]);
+    const left=a.queue.length-a.i;
+    h=`<div class="apTitle">↯ DEEP STRIKE — ${u?u.name:''}</div>
+       <p class="apNote">Click a cell more than 9″ from all enemy units to set up this unit. ${left} unit${left>1?'s':''} left in reserve.</p>
+       <button class="btn apCancel" id="apSkipDsBtn">Skip remaining (stay in Reserves)</button>`;
   }
   host.innerHTML=h;
   // wire
@@ -1470,6 +2704,7 @@ function renderAction(){
   host.querySelectorAll('[data-strat]').forEach(b=>b.onclick=()=>{const u=units.find(x=>x.id===b.dataset.strat);commitStratagem(turn,action.s,u);});
   host.querySelectorAll('.apTgt').forEach(b=>{if(b.dataset.oath||b.dataset.doc||b.dataset.strat)return;b.onclick=()=>{const t=units.find(u=>u.id===b.dataset.t);
     if(a.kind==='shoot')shootPickTarget(t);else if(a.kind==='charge')chargePickTarget(t);else if(a.kind==='fight')fightPickTarget(t);};});
+  const dsb=$('apSkipDsBtn');if(dsb)dsb.onclick=()=>{action=null;showActionPanel(false);updateHint("Reserves held back.");renderAll();render();renderStratPanel();};
   const rb=$('apRollBtn');if(rb)rb.onclick=()=>{if(a.kind==='advance')rollAdvance();else if(a.kind==='shoot')rollShoot();else if(a.kind==='charge')rollCharge();else if(a.kind==='fight')rollFight();};
   const cb=$('apCancelBtn');if(cb)cb.onclick=()=>{action=null;showActionPanel(false);renderAll();render();updateHint();renderStratPanel();};
 }
@@ -1517,9 +2752,9 @@ function renderAll(){
 function unitCard(u){
   const d=document.createElement('div');
   const acted=!deploying&&!placingTerrain&&u.player===turn&&((PHASES[phaseIdx]==="Movement"&&u.moved)||(PHASES[phaseIdx]==="Charge"&&u.charged)||(PHASES[phaseIdx]==="Shooting"&&u.shotWith.length)||(PHASES[phaseIdx]==="Fight"&&u.fought));
-  d.className='unit p'+u.player+(u.id===selId?' sel':'')+(u.dead?' dead':'')+(acted?' acted':'');
+  d.className='unit p'+u.player+(u.id===selId?' sel':'')+(u.dead?' dead':'')+(acted?' acted':'')+(u.inReserve?' reserve':'');
   const frac=u.dead?0:totalWounds(u)/maxWounds(u);
-  d.innerHTML=`<div class="uhead"><b>${u.name}</b>${u.bshock?'<span class="bshock">shock</span>':''}
+  d.innerHTML=`<div class="uhead"><b>${u.name}</b>${u.bshock?'<span class="bshock">shock</span>':''}${u.inReserve?'<span class="bshock" style="background:#10314e;color:#7fd0ff">reserve</span>':''}
     ${!u.deployed&&deploying?'<span class="upip">queued</span>':`<span class="upip">OC ${u.bshock?0:u.oc}</span>`}</div>
     <div class="ustats"><div><span class="k">M</span><span class="v">${u.m}"</span></div><div><span class="k">T</span><span class="v">${u.t}</span></div>
     <div><span class="k">SV</span><span class="v">${u.sv}+</span></div><div><span class="k">W</span><span class="v">${u.w}</span></div>
@@ -1579,6 +2814,16 @@ function boardClick(e){
   if(hx<0||hy<0||hx>=GW||hy>=GH)return;
   if(placingTerrain){terrainClick(hx,hy,fx-hx,fy-hy);return;}
   if(deploying){placeUnit(hx,hy);return;}
+  if(action&&action.kind==='deepstrike'){
+    const u=units.find(x=>x.id===action.queue[action.i]);
+    if(u&&deepStrikePlace(u,hx,hy)){
+      action.i++;
+      if(action.i>=action.queue.length){action=null;showActionPanel(false);updateHint("All reserves placed.");}
+      else renderAction();
+      renderAll();render();
+    }
+    return;
+  }
   const clicked=units.find(u=>!u.dead&&u.hx===hx&&u.hy===hy);
   if(clicked){
     // routing through card click logic
@@ -1661,8 +2906,30 @@ window.addEventListener('DOMContentLoaded',async()=>{
 });
 
 /* Auto-resolve the active phase (uses the same engine, no manual dice). */
+function autoPlaceReserves(p){
+  reservesOf(p).forEach(u=>{
+    // try to place near the nearest enemy but >9", scanning the board
+    let placed=false;
+    const foes=units.filter(e=>!e.dead&&e.deployed&&e.player!==p);
+    let best=null,bestD=Infinity;
+    for(let x=0;x<GW&&!placed;x++)for(let y=0;y<GH;y++){
+      if(cellOccupied(x,y))continue;
+      const tooClose=foes.some(e=>Math.hypot(e.hx-x,e.hy-y)*HEX_INCH<9);
+      if(tooClose)continue;
+      // prefer cells closest to an objective, else to centre
+      const ref=objectives.length?objectives.reduce((a,o)=>{const d=Math.hypot(o.hx-x,o.hy-y);return d<a.d?{d,o}:a;},{d:Infinity}).d:Math.hypot(GW/2-x,GH/2-y);
+      if(ref<bestD){bestD=ref;best={x,y};}
+    }
+    if(best){deepStrikePlace(u,best.x,best.y);placed=true;}
+  });
+}
 function autoResolvePhase(){
   if(deploying||placingTerrain)return;
+  // auto-place any Deep Strike reserves at a valid cell (>9" from enemies), else hold them back
+  if(action&&action.kind==='deepstrike'){
+    autoPlaceReserves(action.p);
+    action=null;showActionPanel(false);
+  }
   const ph=PHASES[phaseIdx];
   if(ph==="Movement"){
     units.filter(u=>u.player===turn&&!u.dead).forEach(u=>{
@@ -1686,6 +2953,7 @@ function autoResolvePhase(){
     advancePhase();return;
   }
   if(ph==="Shooting"){
+    if(isTauArmy(turn))doMarkerlights();   // T'au: auto-mark Spotted targets before shooting
     units.filter(u=>u.player===turn&&!u.dead&&!u.fellback).forEach(u=>{
       const er=inER(u);
       u.ranged.forEach((w,i)=>{if(u.advanced&&!w.ab.assault)return;if(er&&!w.ab.pistol)return;

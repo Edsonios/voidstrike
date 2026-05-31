@@ -309,13 +309,12 @@ function splitSpaceMarineChapters(newFactions,facName){
       return u.length>3 && u.some(isLoyalAstartesUnit) && u.some(k=>kwsOf(k).some(x=>chapterKWs.includes(x)));
     });
   }
-  if(!smId)return;
+  if(!smId)return 0;
+  // don't re-split an already-split faction (its name is the catch-all) unless chapters missing
   const smUnits=newFactions[smId].units;
-  // which chapters actually appear (in ANY keyword) on these units?
   const present=SM_CHAPTERS.filter(ch=>smUnits.some(k=>kwsOf(k).includes(ch.kw)));
-  if(!present.length)return;   // data genuinely doesn't tag chapters — leave single faction
+  if(!present.length)return 0;
   const sortFn=(a,b)=>{const ca=TEMPLATES[a].kw.includes('CHARACTER')?0:1,cb=TEMPLATES[b].kw.includes('CHARACTER')?0:1;if(ca!==cb)return ca-cb;return TEMPLATES[a].pts-TEMPLATES[b].pts;};
-  // generic units = carry no specific chapter keyword (usable by any chapter)
   const generic=smUnits.filter(k=>!kwsOf(k).some(fk=>chapterKWs.includes(fk)));
   present.forEach(ch=>{
     const own=smUnits.filter(k=>kwsOf(k).includes(ch.kw));
@@ -324,16 +323,25 @@ function splitSpaceMarineChapters(newFactions,facName){
     newFactions[fid]={name:ch.name,units:unitSet,color:'imp',chapter:ch.kw,isSM:true};
   });
   newFactions[smId]={name:'Space Marines (any Chapter)',units:smUnits.slice().sort(sortFn),color:'imp',isSM:true};
+  return present.length;
+}
+/* Re-run chapter splitting on the LIVE FACTIONS object (works after any load path).
+   Returns number of chapters created. Idempotent and safe to call repeatedly. */
+function rebuildChapters(){
+  // already split? (chapter sub-factions exist) -> nothing to do
+  if(Object.values(FACTIONS).some(f=>f.isSM&&f.chapter))return 0;
+  const n=splitSpaceMarineChapters(FACTIONS,{});
+  if(n){renderFacSelectors&&renderFacSelectors();}
+  return n;
 }
 
 /* Diagnostic: report what chapter data the importer actually sees. */
 function diagnoseSM(){
   clearDpLog('dpLog');
+  dpLog('dpLog','build marker: chapters-v2','info');   // confirms this app.js version is live
   const chapterKWs=SM_CHAPTERS.map(c=>c.kw);
-  // list every faction and whether it looks like loyalist SM
   const all=Object.entries(FACTIONS).filter(([id])=>id!=='sm'&&id!=='csm');
   dpLog('dpLog',`${all.length} imported factions total.`,'info');
-  // find loyalist SM: name match (excluding chaos) OR loyalist astartes units
   let smId=all.find(([id,f])=>isSpaceMarineFaction(f.name))?.[0];
   if(!smId)smId=all.find(([id,f])=>!/chaos|heretic/i.test(f.name)&&(f.units||[]).some(isLoyalAstartesUnit))?.[0];
   if(!smId){
@@ -343,14 +351,18 @@ function diagnoseSM(){
   }
   const f=FACTIONS[smId];
   dpLog('dpLog',`Loyalist SM faction: "${f.name}" — ${f.units.length} units`,'ok');
+  // does the data carry allKw? (old committed bundles do NOT)
+  const sampleHasAllKw=f.units.slice(0,20).some(k=>TEMPLATES[k]&&TEMPLATES[k].allKw);
+  if(!sampleHasAllKw)dpLog('dpLog','⚠ Loaded data has no full-keyword field (allKw). This is an OLD exported bundle — Re-fetch, then Export & commit factions-data.json again.','err');
   const found={};
   f.units.forEach(k=>kwsOf(k).forEach(w=>{if(chapterKWs.includes(w))found[w]=(found[w]||0)+1;}));
   const chs=Object.keys(found);
   if(chs.length)dpLog('dpLog',`Chapter keywords detected: ${chs.map(c=>c+'('+found[c]+')').join(', ')}`,'ok');
-  else{dpLog('dpLog','NO chapter keywords on these units. Sample below:','err');
-    f.units.slice(0,8).forEach(k=>dpLog('dpLog',`• ${TEMPLATES[k].name}: [${kwsOf(k).join(', ')}]`,'info'));}
-  const splits=Object.values(FACTIONS).filter(x=>x.isSM&&x.chapter).length;
+  else dpLog('dpLog','NO chapter keywords on these units.','err');
+  let splits=Object.values(FACTIONS).filter(x=>x.isSM&&x.chapter).length;
+  if(!splits&&chs.length){const made=rebuildChapters();dpLog('dpLog',`Ran rebuildChapters() → created ${made} chapters.`,made?'ok':'err');splits=made;}
   dpLog('dpLog',`Chapter sub-factions in dropdown: ${splits}`,splits?'ok':'err');
+  if(splits)dpLog('dpLog','✓ Chapters are live. Open the faction dropdown — they are grouped under "Space Marine Chapters". Export & commit to persist for visitors.','ok');
 }
 const PROXIES=[
   {id:'allorigins.win',wrap:u=>'https://api.allorigins.win/raw?url='+encodeURIComponent(u)},
@@ -1244,7 +1256,7 @@ window.addEventListener('DOMContentLoaded',async()=>{
   const committed=await autoLoadCommittedData();
   if(committed){info=committed;where='live data';}
   else{const stored=loadStoredData();if(stored){info=stored;where='saved on device';}}
-  if(info){setStatus(info,where);refreshPlayerNames();renderFacSelectors();renderShops();}
+  if(info){rebuildChapters();setStatus(info,where);refreshPlayerNames();renderFacSelectors();renderShops();}
 
   $('quickFill').onclick=quickMuster;
   $('toBattle').onclick=startBattle;

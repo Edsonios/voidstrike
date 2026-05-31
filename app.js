@@ -211,8 +211,9 @@ function buildFromCSV(tables){
     const lead=mlist[0];
     const m=toInt(lead.M,6),t=toInt(lead.T,4),sv=svNum(lead.Sv),w=toInt(lead.W,1),
           ld=toInt(lead.Ld,7),oc=toInt(lead.OC,1),inv=lead.inv_sv?svNum(lead.inv_sv):0;
-    const kwList=(kws[ds.id]||[]).filter(k=>k.is_faction_keyword!=='true')
-      .map(k=>(k.keyword||k.name||'').toUpperCase()).filter(Boolean);
+    const allKw=(kws[ds.id]||[]).map(k=>({kw:(k.keyword||k.name||'').toUpperCase(),fac:k.is_faction_keyword==='true'})).filter(k=>k.kw);
+    const kwList=allKw.filter(k=>!k.fac).map(k=>k.kw);
+    const factionKw=allKw.filter(k=>k.fac).map(k=>k.kw);
     const ranged=[],melee=[];
     (wargear[ds.id]||[]).forEach(wg=>{
       const isMelee=/melee/i.test(wg.range)||/melee/i.test(wg.type);
@@ -239,7 +240,7 @@ function buildFromCSV(tables){
     modelCount=clamp(modelCount,1,20);
 
     const key=slug(ds.faction_id+'_'+ds.name)||('ds'+ds.id);
-    newTpl[key]={name:ds.name,kw:kwList.length?kwList:["INFANTRY"],pts:pts||0,role:ds.role||'',
+    newTpl[key]={name:ds.name,kw:kwList.length?kwList:["INFANTRY"],factionKw,pts:pts||0,role:ds.role||'',
       m,t,sv,inv,w,ld,oc,models:modelCount,
       ranged,melee:melee.length?melee:[W("Close combat weapon","M",0,1,4,t,0,1)],
       abilities};
@@ -255,6 +256,7 @@ function buildFromCSV(tables){
     newFactions[fid]={name:facName[fid]||('Faction '+fid),units:facUnits[fid],
       color:/chaos|daemon|death|emperor|thousand|world eater/i.test(facName[fid]||'')?'cha':'imp'};
   });
+  splitSpaceMarineChapters(newFactions,facName);
   FACTIONS=Object.assign({},FACTIONS,newFactions);
   dataLoaded=true;
   const ids=Object.keys(newFactions);
@@ -268,6 +270,46 @@ function buildFromCSV(tables){
   return {nUnits,nFac};
 }
 function stripHtml(s){return (s||'').replace(/<[^>]+>/g,'').replace(/&[a-z]+;/g,' ').replace(/\s+/g,' ').trim();}
+
+/* Known Space Marine chapters that appear as a second Faction keyword on datasheets.
+   Generic marine units carry <CHAPTER> (or only ADEPTUS ASTARTES) and belong to any chapter. */
+const SM_CHAPTERS=[
+  {kw:'ULTRAMARINES',name:'Ultramarines'},{kw:'BLOOD ANGELS',name:'Blood Angels'},
+  {kw:'DARK ANGELS',name:'Dark Angels'},{kw:'SPACE WOLVES',name:'Space Wolves'},
+  {kw:'BLACK TEMPLARS',name:'Black Templars'},{kw:'DEATHWATCH',name:'Deathwatch'},
+  {kw:'IMPERIAL FISTS',name:'Imperial Fists'},{kw:'CRIMSON FISTS',name:'Crimson Fists'},
+  {kw:'IRON HANDS',name:'Iron Hands'},{kw:'SALAMANDERS',name:'Salamanders'},
+  {kw:'RAVEN GUARD',name:'Raven Guard'},{kw:'WHITE SCARS',name:'White Scars'},
+];
+function isSpaceMarineFaction(name){return /space marines|adeptus astartes/i.test(name||'');}
+/* For a Space Marines faction, generate one selectable sub-faction per chapter:
+   chapter-specific datasheets + all generic Space Marine datasheets. */
+function splitSpaceMarineChapters(newFactions,facName){
+  const smId=Object.keys(newFactions).find(fid=>isSpaceMarineFaction(newFactions[fid].name));
+  if(!smId)return;
+  const smUnits=newFactions[smId].units;
+  // which chapters are actually present in the data?
+  const present=SM_CHAPTERS.filter(ch=>smUnits.some(k=>(TEMPLATES[k].factionKw||[]).includes(ch.kw)));
+  if(!present.length)return;   // data doesn't tag chapters — leave the single faction as-is
+  const chapterKWs=SM_CHAPTERS.map(c=>c.kw);
+  // generic units = those with no specific chapter keyword (usable by any chapter)
+  const generic=smUnits.filter(k=>!(TEMPLATES[k].factionKw||[]).some(fk=>chapterKWs.includes(fk)));
+  present.forEach(ch=>{
+    const own=smUnits.filter(k=>(TEMPLATES[k].factionKw||[]).includes(ch.kw));
+    // divergent chapters (their own army rules) traditionally don't share the generic Codex pool as freely,
+    // but for playability we include generic units for every chapter (matches how most games are built).
+    const unitSet=[...new Set([...own,...generic])];
+    unitSet.sort((a,b)=>{
+      const ca=TEMPLATES[a].kw.includes('CHARACTER')?0:1,cb=TEMPLATES[b].kw.includes('CHARACTER')?0:1;
+      if(ca!==cb)return ca-cb;return TEMPLATES[a].pts-TEMPLATES[b].pts;});
+    const fid='sm_'+ch.kw.toLowerCase().replace(/[^a-z]+/g,'_');
+    newFactions[fid]={name:ch.name,units:unitSet,color:'imp',chapter:ch.kw,isSM:true};
+  });
+  // keep a generic "Space Marines (any Chapter)" entry too, and drop the raw faction
+  newFactions[smId]={name:'Space Marines (any Chapter)',units:smUnits.slice().sort((a,b)=>{
+    const ca=TEMPLATES[a].kw.includes('CHARACTER')?0:1,cb=TEMPLATES[b].kw.includes('CHARACTER')?0:1;
+    if(ca!==cb)return ca-cb;return TEMPLATES[a].pts-TEMPLATES[b].pts;}),color:'imp',isSM:true};
+}
 
 /* ---------- REMOTE FETCH (Netlify function first, then public proxies) ---------- */
 const PROXIES=[
@@ -387,12 +429,18 @@ function renderSizeRow(){
 }
 function unitsForPlayer(p){return FACTIONS[pFaction[p]]?FACTIONS[pFaction[p]].units:[];}
 function renderFacSelectors(){
+  const entries=Object.entries(FACTIONS);
+  const smChapters=entries.filter(([id,f])=>f.isSM).sort((a,b)=>a[1].name.localeCompare(b[1].name));
+  const others=entries.filter(([id,f])=>!f.isSM).sort((a,b)=>a[1].name.localeCompare(b[1].name));
   [1,2].forEach(p=>{
     const sel=$('facSel'+p);if(!sel)return;sel.innerHTML='';
-    Object.entries(FACTIONS).forEach(([id,f])=>{
-      const o=document.createElement('option');o.value=id;o.textContent=f.name;
-      if(id===pFaction[p])o.selected=true;sel.appendChild(o);
-    });
+    const addOpt=(host,id,f)=>{const o=document.createElement('option');o.value=id;o.textContent=f.name;if(id===pFaction[p])o.selected=true;host.appendChild(o);};
+    others.forEach(([id,f])=>addOpt(sel,id,f));
+    if(smChapters.length){
+      const og=document.createElement('optgroup');og.label='— Space Marine Chapters —';
+      smChapters.forEach(([id,f])=>addOpt(og,id,f));
+      sel.appendChild(og);
+    }
     sel.onchange=()=>{pFaction[p]=sel.value;roster[p]={};
       const col=$('col'+p),c=FACTIONS[pFaction[p]].color;
       col.classList.remove('imp','cha');col.classList.add(c==='cha'?'cha':'imp');

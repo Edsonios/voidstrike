@@ -499,7 +499,7 @@ const DETACHMENT_DATA = {
         ],
         enhancements: [
           { name: "Pyrebrand", pts: 25, restrict: "BLACK TEMPLARS", desc: "Unit gains Stealth.", fx: [{ k: 'subIncomingHit', n: 1, cond: 'rangedOnly' }] },
-          { name: "Sacred Rage", pts: 30, restrict: "ADEPTUS ASTARTES", desc: "Once: unit gains Fights First this Fight phase.", fx: [] },
+          { name: "Sacred Rage", pts: 30, restrict: "ADEPTUS ASTARTES", desc: "Once: unit gains Fights First this Fight phase.", fx: [{ k: 'fightsFirst', selfOnly: true }] },
           { name: "Taramond's Censer", pts: 15, restrict: "BLACK TEMPLARS", desc: "Enemies in Engagement Range take Battle-shock (-1) at start of Fight.", fx: [] },
           { name: "Benediction of Fury", pts: 10, restrict: "CHAPLAIN", desc: "Bearer's melee gain [DEVASTATING WOUNDS].", fx: [{ k: 'grant', ab: 'devastating', selfOnly: true }] }
         ],
@@ -711,7 +711,7 @@ const DETACHMENT_DATA = {
           fx: [{ k: 'plusAttacksMelee', n: 1, cond: 'meleeOnly+chargedThisTurn', scope: 'army' },
                { k: 'plusStrMelee', n: 2, cond: 'meleeOnly+chargedThisTurn', scope: 'army' }] },
         enhancements: [
-          { name: "Speed of the Primarch", pts: 25, restrict: "ADEPTUS ASTARTES", desc: "Once: unit gains Fights First this Fight phase.", fx: [] },
+          { name: "Speed of the Primarch", pts: 25, restrict: "ADEPTUS ASTARTES", desc: "Once: unit gains Fights First this Fight phase.", fx: [{ k: 'fightsFirst', selfOnly: true }] },
           { name: "Rage-fuelled Warrior", pts: 35, restrict: "ADEPTUS ASTARTES", desc: "Once: bearer's melee gain [SUSTAINED HITS 3] this Fight phase.", fx: [{ k: 'grant', ab: 'sustained', val: 3, selfOnly: true }] },
           { name: "Icon of the Angel", pts: 20, restrict: "ADEPTUS ASTARTES", desc: "Enemies in Engagement Range take Desperate Escape tests when falling back.", fx: [] },
           { name: "Gift of Foresight", pts: 15, restrict: "ADEPTUS ASTARTES", desc: "Once per round: treat a Hit/Wound/save for the bearer as an unmodified 6.", fx: [] }
@@ -800,7 +800,7 @@ const DETACHMENT_DATA = {
                { k: 'plusAttacksMelee', n: 1, cond: 'meleeOnly+chargedThisTurn+selfBattleshocked', scope: 'army' }] },
         enhancements: [
           { name: "Carmine Reliquary", pts: 30, restrict: "CHAPLAIN", desc: "Unit gains Scouts 6\"; re-roll Battle-shock tests for nearby units.", fx: [] },
-          { name: "Master of the Red Thirst", pts: 25, restrict: "ADEPTUS ASTARTES", desc: "Once: unit gains Fights First this Fight phase.", fx: [] },
+          { name: "Master of the Red Thirst", pts: 25, restrict: "ADEPTUS ASTARTES", desc: "Once: unit gains Fights First this Fight phase.", fx: [{ k: 'fightsFirst', selfOnly: true }] },
           { name: "Sanguinary Tear", pts: 35, restrict: "ADEPTUS ASTARTES", desc: "Aura: friendly Death Company within 6\" get +1 Strength.", fx: [] },
           { name: "Angel's Fang", pts: 25, restrict: "ADEPTUS ASTARTES", desc: "Bearer's melee vs CHARACTER/MONSTER/VEHICLE have [SUSTAINED HITS 2].", fx: [{ k: 'grant', ab: 'sustained', val: 2, cond: 'targetCMV', selfOnly: true }] }
         ],
@@ -1524,7 +1524,7 @@ const DETACHMENT_DATA = {
         rule: { name: "Feed the Swarm", desc: "In your Command phase each HARVESTER unit Regenerates a friendly unit within 6\" (heal D3+1 wounds, or return models). Healing is modelled on the reanimation hook.", fx: [{ k: 'reanimate', scope: 'army', cond: 'isHarvester' }] },
         enhancements: [
           { name: "Regenerating Monstrosity", pts: 20, restrict: "TYRANIDS", desc: "Bearer's unit can be regenerated twice per phase.", fx: [] },
-          { name: "Instinctive Defence", pts: 15, restrict: "TYRANIDS", desc: "Near a Harvester: Fights First; free Heroic Intervention.", fx: [] },
+          { name: "Instinctive Defence", pts: 15, restrict: "TYRANIDS", desc: "Near a Harvester: Fights First; free Heroic Intervention.", fx: [{ k: 'fightsFirst', selfOnly: true }] },
           { name: "Biophagic Flow", pts: 10, restrict: "TYRANIDS", desc: "Extends a Harvester's Regenerate range to 9\".", fx: [] },
           { name: "Parasitic Biomorphology", pts: 25, restrict: "TYRANIDS", desc: "+1 Strength melee; +1 Attack after first kill near a Harvester.", fx: [{ k: 'plusStrMelee', n: 1, selfOnly: true }] }
         ],
@@ -2183,7 +2183,7 @@ const DETACHMENT_DATA = {
           { name: "Murderous Onslaught", pts: 5, restrict: "WORLD EATERS", desc: "No Overwatch vs the bearer's unit after disembarking.", fx: [] },
           { name: "Aggressive Deployment", pts: 20, restrict: "WORLD EATERS", desc: "Bearer's dedicated transport gains Scouts 9\".", fx: [] },
           { name: "Unleash Hell", pts: 10, restrict: "WORLD EATERS", desc: "Suppress an enemy a nearby Vehicle hits (-1 to Hit).", fx: [] },
-          { name: "Infernal Infusion", pts: 25, restrict: "WORLD EATERS", desc: "Once: bearer's unit has Fights First.", fx: [] }
+          { name: "Infernal Infusion", pts: 25, restrict: "WORLD EATERS", desc: "Once: bearer's unit has Fights First.", fx: [{ k: 'fightsFirst', selfOnly: true }] }
         ],
         stratagems: [
           { name: "Endless Pursuit of Violence", cp: 1, type: "Strategic Ploy", when: 'fight', targetSelf: true, desc: "Embark into a nearby transport.", fx: [] },
@@ -2275,7 +2275,7 @@ const DETACHMENT_DATA = {
           { name: "Blessings of Filth", cp: 1, type: "Battle Tactic", when: 'shootOrFight', targetSelf: true, desc: "Critical Hits on unmodified 5+.", fx: [{ k: 'critOn', val: 5 }] },
           { name: "Malignance Magnified", cp: 2, type: "Battle Tactic", when: 'shootOrFight', targetSelf: true, desc: "Re-roll Hits and Wounds vs below-strength enemies.", fx: [{ k: 'rerollHit', val: 'all', cond: 'targetBelowStrength' }, { k: 'rerollWound', val: 'all', cond: 'targetBelowStrength' }] },
           { name: "Grotesque Fortitude", cp: 1, type: "Battle Tactic", when: 'targeted', targetSelf: true, desc: "+2 Toughness this phase.", fx: [{ k: 'subIncomingWound', n: 1 }] },
-          { name: "Rabid Infusion", cp: 1, type: "Strategic Ploy", when: 'fight', targetSelf: true, desc: "Fights First for a twin-Character unit.", fx: [] },
+          { name: "Rabid Infusion", cp: 1, type: "Strategic Ploy", when: 'fight', targetSelf: true, desc: "Fights First for a twin-Character unit.", fx: [{ k: 'fightsFirst' }] },
           { name: "Mobile Vector", cp: 1, type: "Strategic Ploy", when: 'movement', targetSelf: true, desc: "Attach a loose Character to a unit.", fx: [] },
           { name: "Death\u2019s Heads", cp: 1, type: "Wargear", when: 'shooting', targetSelf: true, desc: "Afflict an enemy with all Plagues.", fx: [] }
         ]
@@ -2668,7 +2668,7 @@ const DETACHMENT_DATA = {
           fx: [{ k: 'objControl', n: 2, cond: 'characterLeading', scope: 'army' }] },
         enhancements: [
           { name: "Throne Mechanicum of Skulls", pts: 25, restrict: "CHAOS KNIGHTS", desc: "Re-roll Charge rolls; once, charge after Advancing.", fx: [{ k: 'rerollCharge', selfOnly: true }] },
-          { name: "Blade of Celerity", pts: 35, restrict: "CHAOS KNIGHTS", desc: "Ranged gain [ASSAULT]; once, Fights First.", fx: [{ k: 'grant', ab: 'assault', cond: 'rangedOnly', selfOnly: true }] },
+          { name: "Blade of Celerity", pts: 35, restrict: "CHAOS KNIGHTS", desc: "Ranged gain [ASSAULT]; once, Fights First.", fx: [{ k: 'grant', ab: 'assault', cond: 'rangedOnly', selfOnly: true }, { k: 'fightsFirst', selfOnly: true }] },
           { name: "Warp-borne Stalker", pts: 25, restrict: "CHAOS KNIGHTS", desc: "Deep Strike; once, redeploy to Reserves.", fx: [{ k: 'grantDeepStrike', selfOnly: true }] },
           { name: "Putrid Carapace", pts: 30, restrict: "CHAOS KNIGHTS", desc: "Save 2+; once, heal D6.", fx: [{ k: 'saveTo', val: 2, selfOnly: true }] },
           { name: "Mirror of Fates", pts: 30, restrict: "CHAOS KNIGHTS", desc: "0CP Command Re-roll once/round; enemy Stratagems near you cost +1CP.", fx: [{ k: 'enemyStratTax', selfOnly: true }] },
@@ -2769,7 +2769,7 @@ const DETACHMENT_DATA = {
         stratagems: [
           { name: "Endless Ire", cp: 2, type: "Epic Deed", when: 'anyPhase', targetSelf: true, desc: "Name a new focus of hatred when one dies.", fx: [] },
           { name: "Contemptuous Disregard", cp: 1, type: "Battle Tactic", when: 'targeted', targetSelf: true, desc: "Incoming attacks worsen AP by 1.", fx: [{ k: 'worsenIncomingAP', n: 1 }] },
-          { name: "Bringers of Despair", cp: 2, type: "Epic Deed", when: 'fight', targetSelf: true, desc: "Fights First in Engagement with your focus.", fx: [] },
+          { name: "Bringers of Despair", cp: 2, type: "Epic Deed", when: 'fight', targetSelf: true, desc: "Fights First in Engagement with your focus.", fx: [{ k: 'fightsFirst' }] },
           { name: "Black Crusade", cp: 1, type: "Strategic Ploy", when: 'movement', targetSelf: true, desc: "Shoot after Advancing/Falling Back; bolt weapons gain [DEVASTATING WOUNDS].", fx: [{ k: 'eligShootAfterAdvance' }, { k: 'eligShootAfterFallBack' }, { k: 'grant', ab: 'devastating', cond: 'rangedOnly' }] },
           { name: "Let the Galaxy Burn", cp: 1, type: "Battle Tactic", when: 'shooting', targetSelf: true, desc: "Ranged gain [IGNORES COVER].", fx: [{ k: 'grant', ab: 'ignorescover', cond: 'rangedOnly' }] },
           { name: "Millennia of Experience", cp: 1, type: "Strategic Ploy", when: 'oppMove', targetSelf: true, desc: "Make a 6\" Normal move.", fx: [{ k: 'extraMove', val: '6' }] }
@@ -3272,7 +3272,7 @@ const DETACHMENT_DATA = {
           { name: "Mechanicus Locum", pts: 10, restrict: "TECH-PRIEST", desc: "Ld 6+; clear a nearby unit's Battle-shock.", fx: [] },
           { name: "Mantle of the Gnosticarch", pts: 15, restrict: "TECH-PRIEST", desc: "Incoming attack Damage set to 1.", fx: [] },
           { name: "Data-blessed Autosermon", pts: 20, restrict: "TECH-PRIEST", desc: "Add the other Benediction for the bearer's unit.", fx: [] },
-          { name: "Temporcopia", pts: 25, restrict: "TECH-PRIEST", desc: "Bearer's unit has Fights First.", fx: [] }
+          { name: "Temporcopia", pts: 25, restrict: "TECH-PRIEST", desc: "Bearer's unit has Fights First.", fx: [{ k: 'fightsFirst', selfOnly: true }] }
         ],
         stratagems: [
           { name: "Incantation of the Iron Soul", cp: 1, type: "Battle Tactic", when: 'anyPhase', targetSelf: true, desc: "FNP 4+ vs mortal wounds.", fx: [{ k: 'fnp', val: 4 }] },
@@ -3534,7 +3534,7 @@ const DETACHMENT_DATA = {
         doctrineLabel: "Combat Drug",
         enhancements: [
           { name: "Pharmacophex", pts: 15, restrict: "SUCCUBUS", desc: "An extra random Combat Drug for the bearer's unit.", fx: [] },
-          { name: "Chronoshard", pts: 15, restrict: "SUCCUBUS", desc: "Once/battle Fights First.", fx: [] },
+          { name: "Chronoshard", pts: 15, restrict: "SUCCUBUS", desc: "Once/battle Fights First.", fx: [{ k: 'fightsFirst', selfOnly: true }] },
           { name: "Periapt of Torments", pts: 25, restrict: "SUCCUBUS", desc: "No Overwatch against the bearer's unit.", fx: [] },
           { name: "Morghenna\u2019s Curse", pts: 20, restrict: "SUCCUBUS", desc: "+1 AP/+1 Damage melee.", fx: [{ k: 'plusApMelee', n: 1, selfOnly: true }] }
         ],
@@ -3801,7 +3801,7 @@ const DETACHMENT_DATA = {
         rule: { name: "Exquisite Swordsmanship", desc: "A unit that made a Charge move picks [LETHAL HITS] or [SUSTAINED HITS 1] for its melee weapons (modelled as both granted on the charge).", fx: [{ k: 'grant', ab: 'lethal', scope: 'army', cond: 'chargedThisTurn+meleeOnly' }, { k: 'grant', ab: 'sustained', val: 1, scope: 'army', cond: 'chargedThisTurn+meleeOnly' }] },
         enhancements: [
           { name: "Faultless Opportunist", pts: 15, restrict: "EMPEROR'S CHILDREN", desc: "Free Heroic Intervention on the bearer's unit (no in-combat fx).", fx: [] },
-          { name: "Blinding Speed", pts: 25, restrict: "EMPEROR'S CHILDREN", desc: "Once/battle the bearer's unit has Fights First for a phase.", fx: [] },
+          { name: "Blinding Speed", pts: 25, restrict: "EMPEROR'S CHILDREN", desc: "Once/battle the bearer's unit has Fights First for a phase.", fx: [{ k: 'fightsFirst', selfOnly: true }] },
           { name: "Distortion", pts: 25, restrict: "EMPEROR'S CHILDREN", desc: "+1 Attacks and +1 Damage to the bearer's melee weapons.", fx: [{ k: 'plusAttacksMelee', n: 1, selfOnly: true }] },
           { name: "Rise to the Challenge", pts: 30, restrict: "EMPEROR'S CHILDREN", desc: "Once/battle the bearer fights an extra time when surrounded (logged).", fx: [] }
         ],
@@ -3993,6 +3993,170 @@ const DETACHMENT_DATA = {
           { name: "Path of the Righteous", cp: 1, type: "Battle Tactic", when: 'fight', targetSelf: true, desc: "Bigger Pile-in/Consolidate (logged).", fx: [] },
           { name: "Bastion of Faith", cp: 1, type: "Battle Tactic", when: 'fightTargeted', targetSelf: true, desc: "Defensive: −1 to incoming Hit rolls.", fx: [{ k: 'subIncomingHit', n: 1, defensive: true }] },
           { name: "Indefatigable Dedication", cp: 1, type: "Strategic Ploy", when: 'move', targetSelf: true, desc: "Shoot (and charge if Righteous) in a turn it Fell Back.", fx: [{ k: 'eligShootAfterFallBack' }, { k: 'eligChargeAfterFallBack', cond: 'selfRighteous' }] }
+        ]
+      }
+    }
+  },
+
+  "Astra Militarum": {
+    armyRule: {
+      name: "Voice of Command",
+      desc: "OFFICER models issue Orders (Move! Move! Move!, Fix Bayonets!, Take Aim!, First Rank Fire!, Take Cover!, Duty and Honour!) to a friendly ASTRA MILITARUM unit within 6\" in the Command phase, lasting until your next Command phase. Orders fall off Battle-shocked units. (Issuance, the six effects, and expiry are wired; the panel issues Orders, and the AI auto-issues.)",
+      fx: []
+    },
+    restrictions: ["Astra Militarum army. Orders are issued in the Command phase (panel or auto) and buff Move/WS/BS/Attacks/Save/Ld+OC. Officer-specific Order counts and the many Order-targeting and transport/Strategic-Reserves stratagems are abstracted: each Officer issues at least one Order (Grand Strategist / Ruthless Discipline add more; Laud Hailer extends range to 12\"). Embark/disembark, super-heavy/TITANIC CHARACTER selection, artillery-barrage board effects, and Deep Strike repositioning are approximated or dormant pending those subsystems."],
+    detachments: {
+      "Combined Arms": {
+        rule: { name: "Born Soldiers", desc: "REGIMENT ranged attacks vs non-MONSTER/VEHICLE units have [LETHAL HITS]; SQUADRON ranged attacks vs MONSTER/VEHICLE units have [LETHAL HITS]. Approximated as army-wide ranged [LETHAL HITS].", fx: [{ k: 'grant', ab: 'lethal', scope: 'army', cond: 'rangedOnly' }] },
+        enhancements: [
+          { name: "Death Mask of Ollanius", pts: 10, restrict: "OFFICER", desc: "Battle-shocked bearer's unit loses only 1 OC instead of all (logged).", fx: [] },
+          { name: "Drill Commander", pts: 20, restrict: "OFFICER", desc: "Bearer's unit: ranged crit on 5+ if it Remained Stationary (modelled as crit-on-5+ ranged).", fx: [{ k: 'critOn', val: 5, cond: 'rangedOnly' }] },
+          { name: "Grand Strategist", pts: 15, restrict: "OFFICER", desc: "Issue one additional Order each Command phase.", fx: [] },
+          { name: "Reactive Command", pts: 15, restrict: "OFFICER", desc: "Issue an Order when an enemy arrives within 9\" (logged).", fx: [] }
+        ],
+        stratagems: [
+          { name: "Coordinated Action", cp: 1, type: "Battle Tactic", when: 'any', targetSelf: true, desc: "Share Orders between a Regiment and a Squadron (logged).", fx: [] },
+          { name: "Reinforcements!", cp: 2, type: "Strategic Ploy", when: 'any', targetSelf: true, desc: "Return a destroyed Infantry Regiment unit to Reserves (logged).", fx: [{ k: 'resurrect' }] },
+          { name: "Flexible Command", cp: 2, type: "Strategic Ploy", when: 'command', targetSelf: true, desc: "Officers can Order Regiment and Squadron units (logged).", fx: [] },
+          { name: "Fields of Fire", cp: 1, type: "Battle Tactic", when: 'shoot', targetSelf: true, desc: "+1 AP vs a chosen enemy.", fx: [{ k: 'plusApRanged', n: 1 }] },
+          { name: "Inspired Command", cp: 1, type: "Epic Deed", when: 'oppCommand', targetSelf: true, desc: "Issue an Order in the opponent's Command phase (logged).", fx: [] },
+          { name: "Stalwart Protector", cp: 1, type: "Battle Tactic", when: 'oppShootTargeted', targetSelf: true, desc: "Infantry behind a vehicle gain Benefit of Cover (logged).", fx: [] }
+        ]
+      },
+      "Siege Regiment": {
+        rule: { name: "Artillery Support", desc: "Each round pick a barrage: Creeping Barrage (shake distant enemies: −2\" Move, −2 Charge), Incendiary Bombardment (distant enemies lose cover), or Smoke Shells (your units gain Stealth). Barrage board effects are abstracted/logged.", fx: [] },
+        enhancements: [
+          { name: "Eager Advance", pts: 20, restrict: "OFFICER", desc: "Bearer's Regiment unit has Scouts 6\" (logged).", fx: [] },
+          { name: "Flash Grenades", pts: 20, restrict: "OFFICER", desc: "No Overwatch against the bearer's unit (logged).", fx: [] },
+          { name: "Legacy Sidearm", pts: 10, restrict: "OFFICER", desc: "+2 Attacks to the bearer's Pistols (logged).", fx: [] },
+          { name: "Stalwart's Honours", pts: 15, restrict: "OFFICER", desc: "When the bearer's unit gets an Order, it's also affected by Take Cover! (logged).", fx: [] }
+        ],
+        stratagems: [
+          { name: "Trench Fighters", cp: 1, type: "Battle Tactic", when: 'fightTargeted', targetSelf: true, desc: "Destroyed models fight before removal.", fx: [{ k: 'fightOnDeath' }] },
+          { name: "Over the Top", cp: 2, type: "Strategic Ploy", when: 'command', targetSelf: true, desc: "Move! Move! Move! to any number of Infantry, any range (logged).", fx: [] },
+          { name: "Flare Burst", cp: 1, type: "Wargear", when: 'shoot', targetSelf: true, desc: "Re-roll Hits vs visible enemies within 12\".", fx: [{ k: 'rerollHit', val: 'all', cond: 'within12+rangedOnly' }] },
+          { name: "Callous Sacrifice", cp: 1, type: "Battle Tactic", when: 'shoot', targetSelf: true, desc: "Shoot out of Engagement Range at a cost (logged).", fx: [] },
+          { name: "Furious Fusillade", cp: 1, type: "Strategic Ploy", when: 'shoot', targetSelf: true, desc: "+1 ranged Attack vs targets within half range (≈12\").", fx: [{ k: 'plusAttacksRanged', n: 1, cond: 'within12' }] },
+          { name: "Minefield", cp: 1, type: "Wargear", when: 'oppCharge', targetSelf: true, desc: "Mortal wounds to enemies charging into your unit (logged).", fx: [] }
+        ]
+      },
+      "Mechanised Assault": {
+        rule: { name: "Armoured Fist", desc: "A model that disembarked from a TRANSPORT this turn adds 1 to its ranged Wound rolls. Disembarking isn't modelled, so applied to INFANTRY ranged attacks army-wide.", fx: [{ k: 'addWound', n: 1, scope: 'army', cond: 'rangedOnly' }] },
+        enhancements: [
+          { name: "Bold Leadership", pts: 25, restrict: "OFFICER", desc: "Hold an objective near the bearer (sticky).", fx: [{ k: 'stickyObjective' }] },
+          { name: "Sacred Unguents", pts: 10, restrict: "TECH-PRIEST", desc: "Re-roll a nearby Transport's Hits (logged).", fx: [] },
+          { name: "Smoke Grenades", pts: 10, restrict: "OFFICER", desc: "Cover + Stealth near a Transport (logged).", fx: [] },
+          { name: "Vanguard Honours", pts: 15, restrict: "OFFICER", desc: "Disembark after the Transport Advanced (logged).", fx: [] }
+        ],
+        stratagems: [
+          { name: "Vox-Relay", cp: 1, type: "Wargear", when: 'command', targetSelf: true, desc: "Issue Orders from inside a Transport (logged).", fx: [] },
+          { name: "Rapid Dispersal", cp: 1, type: "Strategic Ploy", when: 'move', targetSelf: true, desc: "A disembarked unit makes a D6\" move (logged).", fx: [] },
+          { name: "Clear and Secure", cp: 1, type: "Battle Tactic", when: 'shoot', targetSelf: true, desc: "Disembarked: re-roll Hits and Wounds vs a unit on an objective.", fx: [{ k: 'rerollHit', val: 'all' }, { k: 'rerollWound', val: 'all' }] },
+          { name: "Swift Interception", cp: 1, type: "Battle Tactic", when: 'oppMove', targetSelf: true, desc: "A Transport makes a 6\" Normal move (logged).", fx: [] },
+          { name: "Hasty Extraction", cp: 1, type: "Battle Tactic", when: 'oppCharge', targetSelf: true, desc: "Re-embark a charged Infantry unit (logged).", fx: [] },
+          { name: "Move Out", cp: 1, type: "Strategic Ploy", when: 'oppTurnEnd', targetSelf: true, desc: "Re-embark a unit at end of opponent's turn (logged).", fx: [] }
+        ]
+      },
+      "Hammer of the Emperor": {
+        rule: { name: "Iron Tread", desc: "A SQUADRON unit Advancing doesn't roll: +6\" Move and it can move through enemy models. Advance-move handling is abstracted; the +6\" is applied via the Advance system.", fx: [{ k: 'rerollAdvance', scope: 'army', cond: 'isVehicle' }] },
+        enhancements: [
+          { name: "Calm Under Fire", pts: 15, restrict: "OFFICER", desc: "Re-issue a Squadron Order to a second Squadron (logged).", fx: [] },
+          { name: "Indomitable Steed", pts: 15, restrict: "OFFICER", desc: "Bearer has Feel No Pain 6+.", fx: [{ k: 'fnp', val: 6, defensive: true, selfOnly: true }] },
+          { name: "Regimental Banner", pts: 20, restrict: "OFFICER", desc: "+3 Objective Control to the bearer.", fx: [{ k: 'objControl', n: 3, selfOnly: true }] },
+          { name: "Veteran Crew", pts: 20, restrict: "OFFICER", desc: "Re-roll ranged Hit rolls of 1 for the bearer's unit.", fx: [{ k: 'rerollHit', val: 1, cond: 'rangedOnly' }] }
+        ],
+        stratagems: [
+          { name: "Final Hour", cp: 1, type: "Epic Deed", when: 'command', targetSelf: true, desc: "Below-half Squadron: ignore BS modifiers (and [HAZARDOUS]).", fx: [{ k: 'ignoreModifiers', cond: 'rangedOnly' }] },
+          { name: "Blazing Advance", cp: 1, type: "Battle Tactic", when: 'move', targetSelf: true, desc: "Shoot in a turn it Advanced.", fx: [{ k: 'eligShootAfterAdvance' }] },
+          { name: "Tactical Withdrawal", cp: 1, type: "Strategic Ploy", when: 'move', targetSelf: true, desc: "Shoot in a turn it Fell Back.", fx: [{ k: 'eligShootAfterFallBack' }] },
+          { name: "Crash Through", cp: 1, type: "Strategic Ploy", when: 'move', targetSelf: true, desc: "Move through terrain (logged).", fx: [] },
+          { name: "Furious Cannonade", cp: 1, type: "Battle Tactic", when: 'shoot', targetSelf: true, desc: "+1 AP vs targets within 12\".", fx: [{ k: 'plusApRanged', n: 1, cond: 'within12' }] },
+          { name: "Ablative Plating", cp: 2, type: "Wargear", when: 'oppShootTargeted', targetSelf: true, desc: "Defensive: −1 to incoming Damage.", fx: [{ k: 'reduceIncomingDmg', n: 1, defensive: true }] }
+        ]
+      },
+      "Recon Element": {
+        rule: { name: "Masters of Camouflage", desc: "ASTRA MILITARUM WALKER and REGIMENT models have Benefit of Cover; if they already have cover, improve their Save by 1 (max 3+). Modelled as a +1 save (capped) army-wide.", fx: [{ k: 'worsenSave', n: -1, defensive: true, scope: 'army' }] },
+        enhancements: [
+          { name: "Guerrilla Honours", pts: 25, restrict: "OFFICER", desc: "Redeploy up to three Infantry units after deployment (logged).", fx: [{ k: 'toReserves' }] },
+          { name: "Scare Gas Grenades", pts: 5, restrict: "ASTRA MILITARUM", desc: "Once/battle force a nearby enemy Battle-shock test (logged).", fx: [] },
+          { name: "Survival Gear", pts: 5, restrict: "ASTRA MILITARUM", desc: "Bearer has Scouts 6\" (logged).", fx: [] },
+          { name: "Tripwires", pts: 20, restrict: "ASTRA MILITARUM", desc: "Enemies that move within 9\" risk being stunned (−1 to hit) (logged).", fx: [] }
+        ],
+        stratagems: [
+          { name: "Crack Shots", cp: 1, type: "Battle Tactic", when: 'shoot', targetSelf: true, desc: "Ranged weapons gain [PRECISION].", fx: [{ k: 'grant', ab: 'precision', cond: 'rangedOnly' }] },
+          { name: "Draw Them Out", cp: 1, type: "Strategic Ploy", when: 'oppMove', targetSelf: true, desc: "A Platoon makes a 6\" Normal move (logged).", fx: [] },
+          { name: "Scramble Field", cp: 1, type: "Wargear", when: 'oppMove', targetSelf: true, desc: "Block enemy Reserves within 12\" (logged).", fx: [] },
+          { name: "Courageous Diversion", cp: 1, type: "Strategic Ploy", when: 'oppShoot', targetSelf: true, desc: "Feel No Pain 6+ and −1 to be hit if closest.", fx: [{ k: 'fnp', val: 6, defensive: true }, { k: 'subIncomingHit', n: 1, defensive: true }] },
+          { name: "Tanglefoot Grenades", cp: 1, type: "Wargear", when: 'oppCharge', targetSelf: true, desc: "−2 to Charge rolls against your unit (logged).", fx: [] },
+          { name: "Scouting Outriders", cp: 1, type: "Battle Tactic", when: 'oppTurnEnd', targetSelf: true, desc: "Put a Mounted/Walker unit into Strategic Reserves.", fx: [{ k: 'toReserves' }] }
+        ]
+      },
+      "Bridgehead Strike": {
+        rule: { name: "Only the Best", desc: "ASTRA MILITARUM INFANTRY re-roll a ranged Hit roll of 1. (Fire Zone Purge: Tempestus that arrived from Reserves/disembarked add 1 to Hit — abstracted into the re-roll.)", fx: [{ k: 'rerollHit', val: 1, scope: 'army', cond: 'rangedOnly' }] },
+        enhancements: [
+          { name: "Bombast-class Vox-array", pts: 35, restrict: "OFFICER", desc: "Issue an Order to up to three Regiment units (logged).", fx: [] },
+          { name: "Priority-drop Beacon", pts: 30, restrict: "OFFICER", desc: "Deep Strike in turns 1-3 (logged).", fx: [] },
+          { name: "Shroud Projector", pts: 15, restrict: "OFFICER", desc: "No Overwatch against the bearer's unit (logged).", fx: [] },
+          { name: "Advance Augury", pts: 15, restrict: "OFFICER", desc: "Redeploy up to three Regiment units after deployment (logged).", fx: [{ k: 'toReserves' }] }
+        ],
+        stratagems: [
+          { name: "Bellicosa Drop", cp: 1, type: "Battle Tactic", when: 'move', targetSelf: true, desc: "Deep Strike within 6\" of enemies (logged).", fx: [] },
+          { name: "Firing Hot", cp: 2, type: "Battle Tactic", when: 'shoot', targetSelf: true, desc: "+1 S/AP to hot-shot weapons vs targets within 12\".", fx: [{ k: 'plusStrRanged', n: 1, cond: 'within12' }, { k: 'plusApRanged', n: 1, cond: 'within12' }] },
+          { name: "Fire and Relocate", cp: 1, type: "Strategic Ploy", when: 'shoot', targetSelf: true, desc: "Shoot in a turn it Advanced.", fx: [{ k: 'eligShootAfterAdvance' }] },
+          { name: "Servo-designators", cp: 1, type: "Strategic Ploy", when: 'shoot', targetSelf: true, desc: "A hit enemy loses Benefit of Cover (logged).", fx: [] },
+          { name: "Aerial Extraction", cp: 1, type: "Epic Deed", when: 'oppFightEnd', targetSelf: true, desc: "Put a Deep Strike unit into Strategic Reserves.", fx: [{ k: 'toReserves' }] },
+          { name: "On My Position", cp: 1, type: "Epic Deed", when: 'oppFightEnd', targetSelf: true, desc: "Mortal wounds to engaged enemies, at a cost to your unit (logged).", fx: [] }
+        ]
+      },
+      "Grizzled Company": {
+        rule: { name: "Ruthless Discipline", desc: "Each Officer issues +1 Order. While a unit is affected by an Order, re-roll a Hit roll of 1. (The +1 Order is applied to the Orders budget; the re-roll is applied to units carrying an Order.)", fx: [] },
+        enhancements: [
+          { name: "Abhuman Detail", pts: 20, restrict: "COMMISSAR", desc: "Add OGRYN to Orderable units; can join an Ogryn unit (logged).", fx: [] },
+          { name: "Aquilan Eye", pts: 20, restrict: "OFFICER", desc: "Adds the Target Weak Spot Order (+1 AP vs within 12\") — logged.", fx: [] },
+          { name: "Spec Ops Veteran", pts: 15, restrict: "OFFICER", desc: "Adds the Move to the Shadows Order (Stealth when shot) — logged.", fx: [] },
+          { name: "Laud Hailer", pts: 10, restrict: "OFFICER", desc: "Issue Orders to units within 12\" instead of 6\".", fx: [] }
+        ],
+        stratagems: [
+          { name: "Snap to It", cp: 1, type: "Strategic Ploy", when: 'any', targetSelf: true, desc: "Issue an Order as if it were your Command phase (logged).", fx: [] },
+          { name: "No Retreat!", cp: 1, type: "Strategic Ploy", when: 'command', targetSelf: true, desc: "Hold an objective with a Duty-and-Honour! unit (sticky).", fx: [{ k: 'stickyObjective' }] },
+          { name: "Veteran Sharpshooters", cp: 1, type: "Battle Tactic", when: 'shoot', targetSelf: true, desc: "Ranged weapons gain [IGNORES COVER].", fx: [{ k: 'grant', ab: 'ignorescover', cond: 'rangedOnly' }] },
+          { name: "Purging Fire", cp: 1, type: "Battle Tactic", when: 'shoot', targetSelf: true, desc: "Ordered unit on an objective: ranged gain [LETHAL HITS].", fx: [{ k: 'grant', ab: 'lethal', cond: 'rangedOnly' }] },
+          { name: "Mordian Minute", cp: 1, type: "Battle Tactic", when: 'shoot', targetSelf: true, desc: "First-Rank-ordered unit: +1 Strength to attacks.", fx: [{ k: 'plusStrRanged', n: 1 }] },
+          { name: "Additional Armour", cp: 1, type: "Wargear", when: 'oppShootTargeted', targetSelf: true, desc: "Defensive: worsen incoming AP by 1.", fx: [{ k: 'worsenIncomingAP', n: 1, defensive: true }] }
+        ]
+      },
+      "Steel Hammer": {
+        rule: { name: "Ceaseless Cannonade", desc: "TITANIC/SQUADRON units can shoot into Engagement Range without the in-combat Hit penalty (if no other friendly unit is engaged). TITANIC units may gain CHARACTER. Modelled via the no-penalty allowance; selection abstracted.", fx: [] },
+        enhancements: [
+          { name: "Battalion Commander", pts: 30, restrict: "ASTRA MILITARUM", desc: "Titanic bearer gains Voice of Command/OFFICER; issues 2 Orders to Titanic/Squadron (logged).", fx: [] },
+          { name: "Titan Killer", pts: 20, restrict: "ASTRA MILITARUM", desc: "Re-roll the bearer's ranged Damage rolls (logged).", fx: [] },
+          { name: "Engine Speaker", pts: 15, restrict: "TECH-PRIEST", desc: "+3\" Move to a blessed Vehicle (logged).", fx: [] },
+          { name: "Assault Hatches", pts: 25, restrict: "ASTRA MILITARUM", desc: "Disembarked units can still charge (logged).", fx: [] }
+        ],
+        stratagems: [
+          { name: "Engine of Wrath", cp: 1, type: "Epic Deed", when: 'fight', targetSelf: true, desc: "Titanic: +6 melee Attacks and +2 AP vs one enemy.", fx: [{ k: 'plusAttacksMelee', n: 6 }, { k: 'plusApMelee', n: 2 }] },
+          { name: "Imposing Arrival", cp: 1, type: "Strategic Ploy", when: 'move', targetSelf: true, desc: "Bring a Titanic unit on from Reserves (logged).", fx: [] },
+          { name: "Adamantine Behemoth", cp: 1, type: "Strategic Ploy", when: 'move', targetSelf: true, desc: "Move through terrain (logged).", fx: [] },
+          { name: "Shattering Salvo", cp: 1, type: "Strategic Ploy", when: 'shoot', targetSelf: true, desc: "A hit enemy loses Benefit of Cover (logged).", fx: [] },
+          { name: "Withering Firepower", cp: 1, type: "Strategic Ploy", when: 'shoot', targetSelf: true, desc: "A hit enemy takes a −1 Battle-shock test (logged).", fx: [{ k: 'selfBattleshock' }] },
+          { name: "Accuracy Under Pressure", cp: 2, type: "Battle Tactic", when: 'shoot', targetSelf: true, desc: "Re-roll Hit rolls.", fx: [{ k: 'rerollHit', val: 'all' }] }
+        ]
+      },
+      "Armoured Infantry": {
+        rule: { name: "Squadron Command", desc: "Officers can also Order SQUADRON units; adds the On My Signal Order (reactive D6\" move for Armoured Skirmishers). SQUADRON units gain ARMOURED SKIRMISHER. Order-targeting and the reactive move are abstracted.", fx: [] },
+        enhancements: [
+          { name: "Exemplary Officer", pts: 20, restrict: "OFFICER", desc: "Order also issued to two nearby Platoon units (logged).", fx: [] },
+          { name: "Master Manoeuvrist", pts: 15, restrict: "OFFICER", desc: "Re-embark at end of opponent's Fight phase (logged).", fx: [] },
+          { name: "Omnissian Unguents", pts: 35, restrict: "TECH-PRIEST", desc: "Nearby Armoured Skirmishers gain Feel No Pain 5+ (logged).", fx: [] },
+          { name: "Grand Strategist", pts: 25, restrict: "OFFICER", desc: "Redeploy up to two Regiment/Squadron units after deployment (logged).", fx: [{ k: 'toReserves' }] }
+        ],
+        stratagems: [
+          { name: "Order the Advance", cp: 1, type: "Battle Tactic", when: 'move', targetSelf: true, desc: "Re-roll Advance rolls for nearby units.", fx: [{ k: 'rerollAdvance' }] },
+          { name: "Mobile Firebase", cp: 1, type: "Strategic Ploy", when: 'move', targetSelf: true, desc: "Shoot in a turn it Advanced or Fell Back.", fx: [{ k: 'eligShootAfterAdvance' }, { k: 'eligShootAfterFallBack' }] },
+          { name: "Burst of Speed", cp: 1, type: "Strategic Ploy", when: 'move', targetSelf: true, desc: "Make a D6\" Normal move (logged).", fx: [] },
+          { name: "Supporting Ordnance", cp: 1, type: "Battle Tactic", when: 'shoot', targetSelf: true, desc: "Re-roll Hits vs MONSTER/VEHICLE.", fx: [{ k: 'rerollHit', val: 'all', cond: 'isVehicle' }] },
+          { name: "Combined Fire", cp: 1, type: "Battle Tactic", when: 'shoot', targetSelf: true, desc: "A hit enemy loses cover; +2 Strength vs it.", fx: [{ k: 'plusStrRanged', n: 2 }] },
+          { name: "Opening Salvo", cp: 1, type: "Battle Tactic", when: 'shoot', targetSelf: true, desc: "Disembarked: +1 to Wound rolls.", fx: [{ k: 'addWound', n: 1 }] }
         ]
       }
     }

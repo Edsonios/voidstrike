@@ -135,6 +135,8 @@ let miracleDice={1:[],2:[]};        // Adepta Sororitas: Miracle dice pool — a
 let sororVow={1:null,2:null};       // Adepta Sororitas (Penitent Host): active Vow of Atonement id this round
 let sororRighteous={1:[],2:[]};     // Adepta Sororitas (Champions of Faith): unit ids that are Righteous until next Command phase
 let sororUseMiracleBshock={1:false,2:false}; // Sororitas: per-turn intent to substitute a Miracle die into Battle-shock tests
+let unitOrders={1:{},2:{}};         // Astra Militarum: map of unit id -> active Order id (lasts until that player's next Command phase)
+let ordersIssued={1:0,2:0};         // AM: count of Orders issued this Command phase (for the per-round officer budget)
 let dgPlague={1:null,2:null};       // Death Guard: chosen Plague id ('blight'|'ague'|'soulrot') for the army
 let dgAfflictExtra={1:[],2:[]};     // Death Guard: enemy unit ids force-Afflicted by stratagem/bombardment this round
 let fluxTokens={1:0,2:0};           // Chaos Daemons (Tzeentch): Fates in Flux shared re-roll token pool
@@ -225,6 +227,9 @@ function oneCond(c,ctx){
     case 'targetWithinHalf': return def&&dist(att,def)<=12;  // approx "within half range" (range bands not tracked per weapon)
     case 'within9': return def&&dist(att,def)<=9;     // T'au Bonded Heroes / Point-blank
     case 'within6': return def&&dist(att,def)<=6;     // Adepta Sororitas Fervent Purgation / Rites of Fire (target within 6")
+    case 'targetInfantry': return def&&(def.allKw||def.kw||[]).includes('INFANTRY');   // target is an INFANTRY unit
+    case 'targetVehicle': return def&&(def.allKw||def.kw||[]).includes('VEHICLE');     // target is a VEHICLE unit
+    case 'targetMonster': return def&&(def.allKw||def.kw||[]).includes('MONSTER');     // target is a MONSTER unit
     case 'targetBeyond12': return def&&dist(att,def)>12;
     case 'attackerBeyond12': return att&&def&&dist(att,def)>12; // used defensively (att=enemy)
     case 'remainedStationary': return att&&!att.moved&&!att.advanced&&!att.fellback;
@@ -351,7 +356,7 @@ function doctrineActiveFor(p){
    ctx player = attacker's player; also folds in DEFENDER's defensive stratagems. */
 function gatherCombatMods(att,def,weapon,isMelee){
   const p=att.player, ep=def.player;
-  const m={addHit:0,addWound:0,plusAttacksMelee:0,plusStrMelee:0,plusStrRanged:0,
+  const m={addHit:0,addWound:0,plusAttacksMelee:0,plusAttacksRanged:0,plusStrMelee:0,plusStrRanged:0,
     plusApMelee:0,plusApRanged:0,rerollHit:0,rerollWound:0,worsenIncomingAP:0,
     reduceIncomingDmg:0,subIncomingHit:0,subIncomingWound:0,ignoresCover:false,grantCoverDef:false,
     grantSustained:0,grantLethal:false,grantDevastating:false,grantLance:false,grantIgnoresCover:false,
@@ -364,6 +369,9 @@ function gatherCombatMods(att,def,weapon,isMelee){
   // unit-attached enhancement on a leader within the unit is modeled per-unit (att.enh)
   // ---- defender-side: defensive effects (Armour of Contempt, -1 to be hit/wound, FNP, invuln)
   collectFx(def,ep,ectx,m,'defend');
+  // Universal Core abilities on the defender (Stealth: -1 to incoming ranged Hit). Applied through the defend path so
+  // conditions (rangedOnly) and the -1 cap behave identically to every other defensive modifier.
+  applyFxList(coreFxFor(def),ectx,m,'defend');
 
   // Aeldari Star Engines (Battle Focus): a flagged unit's ranged weapons gain [ASSAULT]
   if(att._bfAssault&&!isMelee)m.grantAssault=true;
@@ -395,9 +403,14 @@ function gatherCombatMods(att,def,weapon,isMelee){
   // Heretic Astartes Dark Pact (army-wide this phase): grant both Lethal and Sustained 1 (the generous union).
   // Detachment riders (Mark-of-Chaos crits, Cabal Str/AP) flow through collectFx via the pact* conditions.
   if(isHereticAstartesArmy(p)&&darkPact[p]){m.grantLethal=true;m.grantSustained=Math.max(m.grantSustained,1);}
-  // Drukhari Empowered (a Pain token was spent on this unit this phase): Pain abilities are unit-specific, so as a
-  // faithful generic abstraction an Empowered unit's weapons gain [SUSTAINED HITS 1] for the phase.
-  if(att&&unitEmpowered(att))m.grantSustained=Math.max(m.grantSustained,1);
+  // Drukhari Empowered (a Pain token was spent on this unit this phase). The ability->fx join layer now supplies
+  // each unit's ACTUAL Pain-ability effect (ability_fx.js) instead of a blanket bonus; an unmapped unit falls back
+  // to [SUSTAINED HITS 1] (the old reasonable default) so custom/imported units still do something sensible.
+  if(att&&unitEmpowered(att)){
+    const pf=empoweredFxFor(att);
+    if(pf.length)applyFxList(pf,ctx,m,'attack',att);
+    else m.grantSustained=Math.max(m.grantSustained,1);
+  }
   // Emperor's Children — Pledges to the Dark Prince (Coterie of the Conceited): cumulative Pact-point tiers, army-wide.
   if(isCoterieArmy(p)){
     if(pactPoints[p]>=1)m.rerollHit=mergeRR(m.rerollHit,1);                 // 1+: re-roll Hit roll of 1
@@ -413,6 +426,12 @@ function gatherCombatMods(att,def,weapon,isMelee){
   }
   // Emperor's Children — Favoured Champions (Slaanesh's Chosen): the army's Favoured unit re-rolls the Wound roll.
   if(att&&isFavouredChampions(att))m.rerollWound=mergeRR(m.rerollWound,'all');
+  // Astra Militarum: an Order active on the attacking unit (Take Aim! / Fix Bayonets! / First Rank Fire!).
+  if(att&&isAstraArmy(att.player))orderCombatMods(att,isMelee,m);
+  // Grizzled Company (Ruthless Discipline): a unit affected by any Order re-rolls a Hit roll of 1.
+  if(att&&isAstraArmy(att.player)&&unitOrder(att)&&detachOf(att.player)&&/ruthless discipline/i.test((detachOf(att.player).rule&&detachOf(att.player).rule.name)||''))m.rerollHit=mergeRR(m.rerollHit,1);
+  // Astra Militarum: Take Cover! on the DEFENDING unit improves its save (worsenSave is added to def.sv, so subtract; not better than 3+).
+  if(def&&isAstraArmy(def.player)&&unitOrder(def)==='cover'&&def.sv>3)m.worsenSave-=1;
   // doctrine note for log
   const dn=doctrineActiveFor(p);
   if(rerollText(m))m.note=rerollText(m);
@@ -436,6 +455,7 @@ function applyFxList(fxArr,ctx,m,side,sourceUnit){
       case 'addHit': if(!isDef)m.addHit+=fx.n; break;
       case 'addWound': if(!isDef)m.addWound+=fx.n; break;
       case 'plusAttacksMelee': if(!isDef)m.plusAttacksMelee+=fx.n; break;
+      case 'plusAttacksRanged': if(!isDef)m.plusAttacksRanged+=fx.n; break;
       case 'plusStrMelee': if(!isDef)m.plusStrMelee+=fx.n; break;
       case 'plusStrRanged': if(!isDef)m.plusStrRanged+=fx.n; break;
       case 'plusApMelee': if(!isDef)m.plusApMelee+=fx.n; break;
@@ -451,8 +471,10 @@ function applyFxList(fxArr,ctx,m,side,sourceUnit){
         if(a==='precision')m.grantPrecision=true;if(a==='assault')m.grantAssault=true;} break;
       case 'antiVal': if(!isDef)m.antiKw={kw:fx.kw,val:fx.val}; break;
       case 'critOn': if(!isDef)m.critOn=fx.val; break;
+      case 'fightsFirst': /* declarative: detected via unitHasElig in the Fight-phase ordering, not a combat-math mod */ break;
       // defensive (apply when this unit is the DEFENDER)
       case 'worsenIncomingAP': if(isDef)m.worsenIncomingAP+=fx.n; break;
+      case 'worsenSave': if(isDef)m.worsenSave+=fx.n; break;   // defensive save modifier (negative = better save, e.g. AM Masters of Camouflage / Take Cover!)
       case 'reduceIncomingDmg': if(isDef)m.reduceIncomingDmg+=fx.n; break;
       case 'subIncomingHit': if(isDef)m.subIncomingHit+=fx.n; break;
       case 'subIncomingWound': if(isDef)m.subIncomingWound+=fx.n; break;
@@ -464,6 +486,7 @@ function applyFxList(fxArr,ctx,m,side,sourceUnit){
       case 'saveTo': /* characteristic change handled at muster/enhancement assignment, not per-attack */ break;
       case 'objControl': /* applied in scoring via _ocBonus when stratagem committed */ break;
       case 'reanimate': /* hook: Reanimation Protocols healing — fires once a healing system exists */ break;
+      case 'note': /* display-only: ability text the abstract board can't apply; logged by the consumer */ break;
     }
   });
 }
@@ -511,6 +534,8 @@ function unitHasElig(u,code){
   if(dId){const src=doctrineSource(p);const doc=src&&src.list.find(d=>d.id===dId);if(doc&&scan(doc.fx))return true;}
   if(det&&det.enhancements&&u.enh){const e=det.enhancements.find(x=>x.name===u.enh);if(e&&scan(e.fx))return true;}
   if(u._stratAtk&&det&&det.stratagems){if(u._stratAtk.some(sn=>{const s=det.stratagems.find(x=>x.name===sn);return s&&scan(s.fx);}))return true;}
+  // Ability->fx join: an Empowered Drukhari unit's Pain ability may grant eligibility (e.g. Wyches' charge after Advance/Fall Back).
+  if(unitEmpowered(u)&&scan(empoweredFxFor(u)))return true;
   return false;
 }
 /* Tyranids: is unit u within Synapse Range of its army? True if it is a SYNAPSE model itself,
@@ -542,7 +567,7 @@ function objectiveControlInZone(zone){
   });
   return r;
 }
-function ocOf(u){return Math.max(0,(u.oc||0)+(u._ocBonus||0)+armyOcBonus(u))*(u._ocMult||1)*u.models;}
+function ocOf(u){return Math.max(0,(u.oc||0)+(u._ocBonus||0)+(u._orderOc||0)+armyOcBonus(u))*(u._ocMult||1)*u.models;}
 // Army-rule / detachment-rule objControl fx with scope:'army' (e.g. Lords of Dread +2 OC to Knight CHARACTERs).
 // Evaluated per-unit so conditions like characterLeading are honoured; this is a standing bonus, not a stratagem.
 function armyOcBonus(u){
@@ -1208,7 +1233,7 @@ function newUnit(tplKey,player){
     maxModels:t.models,models:t.models,woundsLeft:t.w,ranged:t.ranged,melee:t.melee,enh:null,
     hx:-1,hy:-1,deployed:false,moved:false,advanced:false,fellback:false,charged:false,fought:false,
     inReserve:false,_setupThisTurn:false,_arriveExtraMove:null,
-    shotWith:[],bshock:false,dead:false,_stratAtk:[],_stratDef:[],_ocBonus:0,_ocMult:1};
+    shotWith:[],bshock:false,dead:false,_stratAtk:[],_stratDef:[],_ocBonus:0,_ocMult:1,_orderMove:0,_orderOc:0,_orderLd:0};
 }
 function totalWounds(u){return (u.models-1)*u.w+u.woundsLeft;}
 function maxWounds(u){return u.maxModels*u.w;}
@@ -1233,6 +1258,7 @@ function buildBattle(){
   yieldPoints={1:0,2:0};votannStance={1:'hostile',2:'hostile'};assailed={1:[],2:[]};pinned=[];
   pactPoints={1:0,2:0};ecPledge={1:0,2:0};ecKills={1:0,2:0};ecPledged={1:false,2:false};favouredChampions={1:null,2:null};
   miracleDice={1:[],2:[]};sororVow={1:null,2:null};sororRighteous={1:[],2:[]};sororUseMiracleBshock={1:false,2:false};
+  unitOrders={1:{},2:{}};ordersIssued={1:0,2:0};
   khorneBlessings={1:[],2:[]};khorneDice={1:null,2:null};khorneRolled={1:false,2:false};
   dgPlague={1:null,2:null};dgAfflictExtra={1:[],2:[]};
   fluxTokens={1:0,2:0};shadowCorrupt={1:[],2:[]};
@@ -1404,7 +1430,7 @@ function resolveAttacks(att,def,weapon,nModels,silent){
     if(mods.grantPrecision)ab.precision=true;
     if(mods.grantAssault)ab.assault=true;
     if(mods.antiKw&&def.kw.includes(mods.antiKw.kw)){if(!ab.anti||ab.anti.val>mods.antiKw.val)ab.anti={kw:mods.antiKw.kw,val:mods.antiKw.val};}}
-  let perModel=weapon.a + (isMelee&&mods?mods.plusAttacksMelee:0);
+  let perModel=weapon.a + (isMelee&&mods?mods.plusAttacksMelee:0) + (!isMelee&&mods?(mods.plusAttacksRanged||0):0);
   if(ab.rapidfire&&weapon.type==="R"&&dist(att,def)<=weapon.rng/2)perModel+=ab.rapidfire;
   if(perModel<1)perModel=1;
   let attacks=perModel*nModels;
@@ -1457,8 +1483,9 @@ function resolveAttacks(att,def,weapon,nModels,silent){
   if(mods)apEff=Math.max(0,apEff-mods.worsenIncomingAP*0)+0; // (incoming AP worsen handled below for defender)
   // defender AP worsening (Armour of Contempt etc.) reduces attacker AP
   let apPenalty=-wAp - (mods?mods.worsenIncomingAP:0);
-  const dgSaveWorsen=mods?(mods.worsenSave||0):0;   // Death Guard Rattlejoint Ague worsens the Afflicted save
-  const effSv=def.sv+dgSaveWorsen;
+  const dgSaveWorsen=mods?(mods.worsenSave||0):0;   // save modifier: + worsens (Death Guard Ague), − improves (AM Take Cover! / Masters of Camouflage)
+  let effSv=def.sv+dgSaveWorsen;
+  if(dgSaveWorsen<0&&effSv<3)effSv=3;               // improving Save cannot go better than 3+
   const useInv=def.inv>0 && def.inv < (effSv+apPenalty+(cover&&!(def.sv<=3&&wAp===0)?1:0));
   const invUsed=mods&&mods.defInvuln?Math.min(def.inv||7,mods.defInvuln):def.inv;
   for(let i=0;i<normalWounds;i++){let r=d6();let need;
@@ -1554,6 +1581,7 @@ function doCommandPhase(){
   if(isTyranidArmy(turn))synapticImp[turn]=null;
   if(isThousandSonsArmy(turn))kindredTSon[turn]=null;   // Grand Coven Kindred Sorcery: re-pickable each round
   if(isSororitasArmy(turn)){sororRighteous[turn]=[];}  // Righteous lasts until this player's next Command phase, then is re-picked
+  if(isAstraArmy(turn)){clearOrders(turn);autoIssueOrders(turn);}  // Voice of Command: last round's Orders expire; officers issue new ones (auto in headless/AI; interactive via panel)
   cp[turn]+=1;log("sys",`+1 CP → ${cp[turn]} CP.`);
   // Drukhari Power from Pain: +1 Pain token at the start of each Command phase
   if(isDrukhariArmy(turn))gainPain(turn,1,'Command phase');
@@ -1577,11 +1605,12 @@ function doCommandPhase(){
     if(haTerrorActive(ep)&&units.some(o=>o.player===ep&&!o.dead&&o.deployed&&!o.inReserve&&unitHasKw(o,'HERETIC ASTARTES')&&dist(o,u)<=6)){mod-=1;}
     // Chaos Knights Harbingers of Dread: Deathly Terror / Despair worsen the enemy's Leadership (higher LD = harder)
     const ldPen=dreadLdPenalty(u,ep);
-    const effLd=u.ld+ldPen;
+    const effLd=u.ld+ldPen-(u._orderLd||0);   // Astra Militarum Duty and Honour!: +1 Ld → lower target number
     r+=mod;
     const pass=r>=effLd;
     log("",`Battle-shock ${u.name}: <b>${r}</b> vs LD${effLd}${syn?' (Synapse 3D6)':''}${miracleSub!=null?` (Miracle ${miracleSub}+D6)`:''}${mod?` (${mod>0?'+':''}${mod} Shadow)`:''}${ldPen?` (+${ldPen} Dread)`:''} — ${pass?'<span class="save">PASS</span>':'<span class="kill">FAIL · shocked</span>'}`);
     u.bshock=!pass;
+    if(u.bshock&&isAstraArmy(u.player)&&unitOrders[u.player][u.id]){delete unitOrders[u.player][u.id];u._orderMove=0;u._orderOc=0;u._orderLd=0;log("sys",`&nbsp;&nbsp;${u.name} is Battle-shocked — its Order ceases.`);}
     if(!pass&&isDrukhariArmy(ep))gainPain(ep,1,'enemy failed Battle-shock');  // Power from Pain: +1 when an enemy fails Battle-shock
     if(manifest&&pass){const h=reanimateUnit(u,d3());if(h)log("sys",`&nbsp;&nbsp;Daemonic Manifestation: ${u.name} reknits ${h}W.`);}
     if(terror&&!pass){const mw=d3();applyMortals(u,mw);log("kill",`&nbsp;&nbsp;Daemonic Terror: ${u.name} suffers ${mw} mortal wound(s).`);}
@@ -1736,7 +1765,7 @@ function tryMove(u,hx,hy){
   if(cellOccupied(hx,hy,u.id)){updateHint("Cell occupied.");return;}
   if(segBlocked(u.hx,u.hy,hx,hy)){updateHint("A wall or closed hatchway blocks that path.");return;}
   const d=Math.hypot(u.hx-hx,u.hy-hy)*HEX_INCH;
-  const eM=u.m+(u._bfMove||0);   // effective Move incl. Battle Focus (Swift as the Wind / reposition)
+  const eM=u.m+(u._bfMove||0)+(u._orderMove||0);   // effective Move incl. Battle Focus + AM Move! Move! Move! Order
   const startER=inER(u);
   const wouldER=units.some(e=>!e.dead&&e.player!==u.player&&Math.hypot(e.hx-hx,e.hy-hy)*HEX_INCH<=ENGAGE_IN&&!segBlocked(e.hx,e.hy,hx,hy));
   if(startER){
@@ -1753,7 +1782,7 @@ function tryMove(u,hx,hy){
   render();renderAll();updateHint();
 }
 function rollAdvance(){
-  const a=action;const adv=d6();const tot=a.u.m+(a.u._bfMove||0)+adv;
+  const a=action;const adv=d6();const tot=a.u.m+(a.u._bfMove||0)+(a.u._orderMove||0)+adv;
   log("",`${a.u.name} Advance: rolled <b>${adv}</b> → ${tot}″ move.`);logDice([{v:adv}]);
   if(a.need<=tot){a.u.hx=a.hx;a.u.hy=a.hy;a.u.moved=true;a.u.advanced=true;
     log("sys",`&nbsp;&nbsp;Reached destination (${a.need.toFixed(1)}″). No shooting (non-Assault) or charging.`);}
@@ -1811,12 +1840,80 @@ function moveAdjacent(u,tgt){
   u.hx=nx;u.hy=ny;
 }
 
+/* In-combat movement on the single-token board. The real game moves each MODEL up to 3" toward the closest
+   enemy, ending in base-to-base + Unit Coherency; with one position per unit we model the NET unit-level move:
+   step toward the closest target by the largest legal step within `maxInch` (Pile In / Consolidate are both 3"),
+   ending in an engaging (adjacent) cell when reachable. Per-model coherency / spreading across units is not
+   represented because per-model positions don't exist in this engine. Returns true if the unit actually moved.
+   `closestEnemyTo(u)` — nearest living enemy by distance, ignoring AIRCRAFT unless u can FLY (matches Pile-In rules). */
+function closestEnemyTo(u){
+  let best=null,bd=1e9;
+  units.forEach(e=>{ if(e.dead||e.player===u.player)return;
+    if((e.allKw||e.kw||[]).includes('AIRCRAFT') && !(u.allKw||u.kw||[]).includes('FLY'))return;
+    const d=dist(u,e); if(d<bd){bd=d;best=e;} });
+  return best;
+}
+// Step u up to maxInch toward (tx,ty), one cell at a time, choosing the neighbour that most reduces distance,
+// never stacking, never crossing blocked terrain, never leaving the board. Stops early if already adjacent to goal.
+function stepToward(u,tx,ty,maxInch){
+  let budget=maxInch, moved=false, guard=0;
+  while(budget>0 && guard++<8){
+    const here=Math.hypot(u.hx-tx,u.hy-ty);
+    if(here<=1.0)break; // already in/at the goal cell (adjacent)
+    let best=null,bd=here;
+    for(let ox=-1;ox<=1;ox++)for(let oy=-1;oy<=1;oy++){
+      if(!ox&&!oy)continue;
+      const nx=u.hx+ox, ny=u.hy+oy;
+      if(nx<0||ny<0||nx>=GW||ny>=GH)continue;
+      const stepCost=Math.hypot(ox,oy)*HEX_INCH;          // 2" orthogonal, ~2.83" diagonal
+      if(stepCost>budget+1e-6)continue;
+      if(cellOccupied(nx,ny,u.id))continue;
+      if(segBlocked(u.hx,u.hy,nx,ny))continue;
+      const nd=Math.hypot(nx-tx,ny-ty);
+      if(nd<bd-1e-6){bd=nd;best={nx,ny,cost:stepCost};}
+    }
+    if(!best)break;
+    u.hx=best.nx;u.hy=best.ny;budget-=best.cost;moved=true;
+  }
+  return moved;
+}
+// Pile In: 3" toward the closest enemy, only if the unit is (and stays) engaged. No move if not engaged.
+function pileInMove(u){
+  if(!inER(u))return false;
+  const tgt=closestEnemyTo(u); if(!tgt)return false;
+  const moved=stepToward(u,tgt.hx,tgt.hy,3);
+  if(moved&&!inER(u)){/* never end a Pile In out of engagement */ }
+  return moved;
+}
+// Consolidate: 3" toward the closest enemy; if none is reachable into engagement, toward the closest objective
+// (ending within range of it). Lets a unit that destroyed its foe advance onto a new enemy or seize an objective.
+function consolidateMove(u){
+  if(u.dead)return false;
+  const tgt=closestEnemyTo(u);
+  if(tgt){
+    const before={hx:u.hx,hy:u.hy};
+    let moved=stepToward(u,tgt.hx,tgt.hy,3);
+    if(moved&&inER(u))return true;            // reached/closed on an enemy — good
+    if(moved&&!inER(u)){u.hx=before.hx;u.hy=before.hy;moved=false;} // would end out of engagement via enemy path; try objective instead
+    if(moved)return true;
+  }
+  // toward closest objective, but only finish if we end within range (≤1.5 cells), per the rules' fallback
+  if(objectives.length){
+    let best=null,bd=1e9; objectives.forEach(o=>{const d=Math.hypot(o.hx-u.hx,o.hy-u.hy);if(d<bd){bd=d;best=o;}});
+    if(best){const before={hx:u.hx,hy:u.hy};const moved=stepToward(u,best.hx,best.hy,3);
+      if(moved&&Math.hypot(u.hx-best.hx,u.hy-best.hy)<=1.5)return true;
+      u.hx=before.hx;u.hy=before.hy;} // couldn't end in range — undo
+  }
+  return false;
+}
+
 /* ---- FIGHT: pick an engaged unit, roll its attacks ---- */
 function beginFightSelection(u){
   if(u.dead||PHASES[phaseIdx]!=="Fight")return;
   if(!inER(u)){updateHint(`${u.name} is not in Engagement Range.`);return;}
   if(u.fought){updateHint(`${u.name} already fought.`);return;}
   if(!u.melee.length){updateHint(`${u.name} has no melee weapons.`);return;}
+  if(pileInMove(u))log("",`${u.name} piles in.`);          // 1. Pile In (3" toward closest enemy)
   const targets=units.filter(e=>!e.dead&&e.player!==u.player&&engaged(u,e));
   if(!targets.length)return;
   action={kind:'fight',u,targets,target:targets[0].id};selId=u.id;showActionPanel(true);renderAction();render();
@@ -1826,7 +1923,9 @@ function rollFight(){
   const a=action;const u=a.u;const tgt=units.find(x=>x.id===a.target);if(!tgt)return;
   if(u.charged)log("sys",`${u.name} (charged — fights first)`);
   resolveAttacks(u,tgt,u.melee[0],u.models,false);
-  u.fought=true;scoreObjectivesLive();
+  u.fought=true;
+  if(!u.dead&&consolidateMove(u))log("",`${u.name} consolidates.`);   // 3. Consolidate
+  scoreObjectivesLive();
   action=null;showActionPanel(false);render();renderAll();updateHint();
 }
 
@@ -1844,7 +1943,7 @@ function operateHatchways(){
 function scoreObjectives(){
   objectives.forEach(o=>{let oc={1:0,2:0};
     units.filter(u=>!u.dead&&!u.bshock&&Math.hypot(u.hx-o.hx,u.hy-o.hy)<=1.5).forEach(u=>{
-      let ocv=(u.oc+(u._ocBonus||0)+armyOcBonus(u))*(u._ocMult||1)*u.models;oc[u.player]+=ocv;});
+      let ocv=(u.oc+(u._ocBonus||0)+(u._orderOc||0)+armyOcBonus(u))*(u._ocMult||1)*u.models;oc[u.player]+=ocv;});
     let holder=oc[1]>oc[2]?1:oc[2]>oc[1]?2:0;
     if(holder===0&&o.sticky)holder=o.sticky;       // sticky: stays held if uncontested
     if(holder){vp[holder]+=1;if(o.sticky&&o.sticky!==holder)o.sticky=holder;else if(!o.sticky&&holder)o.lastHeld=holder;}
@@ -2160,6 +2259,25 @@ function renderStratPanel(){
       else h+=`<p class="apNote">Select one of your units to mark it Righteous (up to 3).</p>`;
     }
   }
+  // Astra Militarum: Voice of Command — show active Orders and let the player issue one to the selected unit
+  if(isAstraArmy(turn)){
+    const issued=Object.entries(unitOrders[turn]).map(([id,oid])=>{const u=units.find(x=>x.id===id);return u?`${u.name}: ${orderName(oid)}`:null;}).filter(Boolean);
+    h+=`<div class="apSub" style="margin-top:8px">Voice of Command — ${ordersIssued[turn]}/${orderBudgetFor(turn)} Orders issued</div>`;
+    h+=`<p class="apNote" style="color:#cd9">${issued.length?'Active: '+issued.join(' · '):'No Orders active.'} Orders last until your next Command phase and fall off Battle-shocked units.</p>`;
+    if(phaseIdx===0){
+      const su=units.find(x=>x.id===selId&&x.player===turn&&!x.dead);
+      const of=su?units.filter(u=>u.player===turn&&!u.dead&&u.deployed&&isOfficer(u)).sort((a,b)=>dist(a,su)-dist(b,su))[0]:null;
+      if(su&&!isOfficer(su)&&of&&dist(of,su)<=orderRangeFor(turn)&&unitHasKw(su,'ASTRA MILITARUM')&&!su.bshock){
+        h+=`<p class="apNote">Issue to <b>${su.name}</b> (from ${of.name}, ${dist(of,su).toFixed(0)}" away):</p><div class="vowRow">`;
+        ORDERS.forEach(o=>{h+=`<button class="stratBtn amOrderBtn" data-o="${o.id}" data-u="${su.id}" data-of="${of.id}" style="margin-top:3px${unitOrders[turn][su.id]===o.id?';border-color:#caa14a':''}"><b>${o.name}</b><span class="ds">${o.desc}</span></button>`;});
+        h+=`</div>`;
+      } else if(su&&isOfficer(su)){
+        h+=`<p class="apNote">Select a non-officer ASTRA MILITARUM unit within command range to issue it an Order.</p>`;
+      } else {
+        h+=`<p class="apNote">Select one of your units (within 6"/12" of an Officer) to issue it an Order.</p>`;
+      }
+    }
+  }
   // World Eaters: Blessings of Khorne dice-pool (roll 8D6, activate up to two Blessings per round)
   if(isWorldEatersArmy(turn)){
     h+=`<div class="apSub" style="margin-top:8px">Blessings of Khorne</div>`;
@@ -2245,7 +2363,7 @@ function renderStratPanel(){
     }
   }
   host.innerHTML=h;
-  host.querySelectorAll('.stratBtn').forEach(b=>{if(b.id!=='sagaToggleBtn'&&b.id!=='gateBtn'&&b.id!=='waaaghBtn'&&b.id!=='shadowBtn'&&b.id!=='markBtn'&&b.id!=='khorneRollBtn'&&!b.classList.contains('synImpBtn')&&!b.classList.contains('bfBtn')&&!b.classList.contains('khBlessBtn')&&!b.classList.contains('dgPlagueBtn')&&!b.classList.contains('fluxBtn')&&!b.classList.contains('ritualBtn')&&!b.classList.contains('kindredBtn')&&!b.classList.contains('dreadBtn')&&!b.classList.contains('pactBtn')&&!b.classList.contains('bileBtn')&&!b.classList.contains('painBtn')&&!b.classList.contains('votannFlipBtn')&&!b.classList.contains('ecPledgeBtn')&&!b.classList.contains('sororBshockBtn')&&!b.classList.contains('sororVowBtn')&&!b.classList.contains('sororRightBtn'))b.onclick=()=>useStratagem(turn,b.dataset.s);});
+  host.querySelectorAll('.stratBtn').forEach(b=>{if(b.id!=='sagaToggleBtn'&&b.id!=='gateBtn'&&b.id!=='waaaghBtn'&&b.id!=='shadowBtn'&&b.id!=='markBtn'&&b.id!=='khorneRollBtn'&&!b.classList.contains('synImpBtn')&&!b.classList.contains('bfBtn')&&!b.classList.contains('khBlessBtn')&&!b.classList.contains('dgPlagueBtn')&&!b.classList.contains('fluxBtn')&&!b.classList.contains('ritualBtn')&&!b.classList.contains('kindredBtn')&&!b.classList.contains('dreadBtn')&&!b.classList.contains('pactBtn')&&!b.classList.contains('bileBtn')&&!b.classList.contains('painBtn')&&!b.classList.contains('votannFlipBtn')&&!b.classList.contains('ecPledgeBtn')&&!b.classList.contains('sororBshockBtn')&&!b.classList.contains('sororVowBtn')&&!b.classList.contains('sororRightBtn')&&!b.classList.contains('amOrderBtn'))b.onclick=()=>useStratagem(turn,b.dataset.s);});
   const sg=$('sagaToggleBtn');if(sg)sg.onclick=()=>{sagaDone[turn]=!sagaDone[turn];log("sys",`${PNAME[turn]} Saga ${sagaDone[turn]?'COMPLETED — upgraded effects active':'reset'}.`);renderStratPanel();};
   const gb=$('gateBtn');if(gb)gb.onclick=()=>doGateOfInfinity();
   const wb=$('waaaghBtn');if(wb)wb.onclick=()=>callWaaagh();
@@ -2268,6 +2386,7 @@ function renderStratPanel(){
   host.querySelectorAll('.sororBshockBtn').forEach(b=>b.onclick=()=>sororToggleMiracleBshock());
   host.querySelectorAll('.sororVowBtn').forEach(b=>b.onclick=()=>chooseSororVow(b.dataset.v));
   host.querySelectorAll('.sororRightBtn').forEach(b=>b.onclick=()=>toggleRighteous(b.dataset.u));
+  host.querySelectorAll('.amOrderBtn').forEach(b=>b.onclick=()=>{const of=units.find(u=>u.id===b.dataset.of),tu=units.find(u=>u.id===b.dataset.u);if(issueOrder(of,tu,b.dataset.o)){renderAll();render();renderStratPanel();updateHint();}});
 }
 function doGateOfInfinity(){
   if(!pendingGate||pendingGate.p!==turn)return;
@@ -2413,6 +2532,52 @@ function empowerUnit(){
   renderAll();render();renderStratPanel();updateHint();
 }
 function unitEmpowered(u){return !!u&&isDrukhariArmy(u.player)&&empowered[u.player]&&empowered[u.player].includes(u.id);}
+// ---- Ability -> fx join layer (ability_fx.js). Keyed by datasheet_id (template key) + normalised ability name. ----
+function normAbil(s){return (s||'').toLowerCase().replace(/[^a-z0-9]+/g,'');}
+// Return the list of fx authored for a given unit's named abilities (matched by template key + ability name).
+// Tolerant: an unmapped or renamed ability simply contributes nothing (the text still displays elsewhere).
+function abilityFxFor(u, filterFn){
+  if(typeof ABILITY_FX==='undefined'||!u||!u.tpl)return [];
+  const map=ABILITY_FX[u.tpl];if(!map)return [];
+  const out=[];
+  (u.abilities||[]).forEach(a=>{
+    if(filterFn&&!filterFn(a))return;
+    const fx=map[normAbil(a.name)];
+    if(fx)fx.forEach(f=>out.push(f));
+  });
+  return out;
+}
+// The Drukhari Empowered combat contribution: this unit's actual Pain-ability fx (replaces the old blanket Sustained 1).
+// Pain abilities are the ones tagged "(Pain)" in their name. Applied through the same applyFxList path as everything else.
+function empoweredFxFor(u){
+  return abilityFxFor(u, a=>/\(pain\)/i.test(a.name||''));
+}
+// Universal Core abilities (CORE_FX, keyed by normalised ability name, faction-agnostic). Returns the fx for whichever
+// Core abilities this unit has. `note` fx are no-ops; the only currently-applied Core fx is Stealth (defender-side -1 to hit).
+function coreFxFor(u){
+  if(typeof CORE_FX==='undefined'||!u)return [];
+  const out=[];
+  (u.abilities||[]).forEach(a=>{
+    if((a.type||'')!=='Core')return;
+    const fx=CORE_FX[normAbil(a.name)];
+    if(fx)fx.forEach(f=>out.push(f));
+  });
+  return out;
+}
+// Lone Operative: a unit with this Core ability can only be targeted by ranged attacks from within 12" (unless Attached).
+function unitIsLoneOp(u){
+  return !!u && (u.abilities||[]).some(a=>(a.type||'')==='Core' && normAbil(a.name)==='loneoperative');
+}
+// Fights First (Core Rules step 1). A unit fights in the Fights First step if ANY of:
+//   - it made a Charge move this turn (the rules explicitly fold chargers into step 1, and they carry the Charge bonus),
+//   - it has the Fights First Core ability on its datasheet,
+//   - it currently has a granted Fights First effect (enhancement/stratagem emitting the fightsFirst fx).
+function unitHasFightsFirstAbility(u){
+  return !!u && ((u.abilities||[]).some(a=>(a.type||'')==='Core' && normAbil(a.name)==='fightsfirst') || unitHasElig(u,'fightsFirst'));
+}
+function unitFightsFirst(u){
+  return !!u && (u.charged || unitHasFightsFirstAbility(u));
+}
 function allianceOfAgony(p){
   // Realspace Raiders: start with up to 6 Pain tokens (2 per Archon+Kabalite / Succubus+Wych / Haemonculus+Wrack combo).
   // Detachment composition isn't tracked, so grant a flat starting pool to a Realspace Raiders Drukhari army.
@@ -2580,6 +2745,94 @@ function toggleRighteous(uid){
   const u=units.find(x=>x.id===uid);if(u)log("sys",`${u.name} ${arr.includes(uid)?'is now Righteous':'is no longer Righteous'} (${arr.length}/3).`);
   renderAll();render();renderStratPanel();updateHint();
 }
+// ---- Astra Militarum: Voice of Command (Orders) ----
+function isAstraArmy(p){const ar=armyRuleOf(p);return /astra militarum/i.test((FACTIONS[pFaction[p]]||{}).name||'')||/voice of command|born soldiers|artillery support|armoured fist|iron tread|masters of camouflage|only the best|ruthless discipline|ceaseless cannonade|squadron command/i.test((ar&&ar.name)||'');}
+// The six core Orders (plus enhancement/detachment Orders abstracted). id -> {name, kind, apply}
+const ORDERS=[
+  {id:'mmm', name:'Move! Move! Move!',  desc:'+3" Move.'},
+  {id:'bayonets', name:'Fix Bayonets!',  desc:'+1 WS (melee Hit).'},
+  {id:'aim', name:'Take Aim!',  desc:'+1 BS (ranged Hit).'},
+  {id:'firstrank', name:'First Rank, Fire!',  desc:'+1 Attack to Rapid Fire (ranged).'},
+  {id:'cover', name:'Take Cover!',  desc:'+1 Save (max 3+).'},
+  {id:'duty', name:'Duty and Honour!',  desc:'+1 Leadership and +1 Objective Control.'}
+];
+function orderName(id){const o=ORDERS.find(x=>x.id===id);return o?o.name:id;}
+function isOfficer(u){return !!u&&(unitHasKw(u,'OFFICER')||/\bofficer\b/i.test(u.name||''));}
+// Active Order on a unit (null if none or if the unit is Battle-shocked — Orders fall off shocked units).
+function unitOrder(u){if(!u||u.bshock)return null;return unitOrders[u.player]&&unitOrders[u.player][u.id]||null;}
+// Apply the persistent (non-combat) parts of an Order immediately: Move and OC bonuses ride on the unit.
+function applyOrderPersistent(u){
+  const id=unitOrder(u);if(!u)return;
+  // recompute order-driven move/OC from scratch each time
+  u._orderMove=0;u._orderOc=0;u._orderLd=0;
+  if(id==='mmm')u._orderMove=3;
+  if(id==='duty'){u._orderOc=1;u._orderLd=1;}
+}
+function issueOrder(officer,unitU,orderId){
+  if(!isAstraArmy(turn)){log("sys","Only Astra Militarum can issue Orders.");return false;}
+  if(!officer||!isOfficer(officer)){log("sys","Select an OFFICER to issue the Order.");return false;}
+  if(!unitU||unitU.player!==turn||unitU.dead){log("sys","Pick a friendly unit to receive the Order.");return false;}
+  if(unitU.bshock){log("sys",`${unitU.name} is Battle-shocked and cannot receive Orders.`);return false;}
+  if(!unitHasKw(unitU,'ASTRA MILITARUM')){log("sys","Only ASTRA MILITARUM units benefit from Orders.");return false;}
+  const R=orderRangeFor(turn);
+  if(dist(officer,unitU)>R){log("sys",`${unitU.name} is out of command range (${R}").`);return false;}
+  if(!ORDERS.find(o=>o.id===orderId)){log("sys","Unknown Order.");return false;}
+  unitOrders[turn][unitU.id]=orderId;
+  applyOrderPersistent(unitU);
+  ordersIssued[turn]++;
+  log("hd",`📣 ${officer.name} issues "${orderName(orderId)}" to ${unitU.name}.`);
+  return true;
+}
+// Command range for Orders (6", or 12" with a Laud Hailer / Grizzled Company enhancement on the army).
+function orderRangeFor(p){
+  if(units.some(u=>u.player===p&&!u.dead&&(u.enh==='Laud Hailer')))return 12;
+  return 6;
+}
+// Orders budget this Command phase: 1 per Officer, +1 each from Grand Strategist / Ruthless Discipline (Grizzled Company).
+function orderBudgetFor(p){
+  const officers=units.filter(u=>u.player===p&&!u.dead&&u.deployed&&isOfficer(u));
+  let n=officers.length;   // each officer issues at least one (datasheet specifics abstracted)
+  const det=detachOf(p);
+  if(det&&/ruthless discipline/i.test((det.rule&&det.rule.name)||''))n+=officers.length;  // +1 per officer
+  n+=units.filter(u=>u.player===p&&!u.dead&&u.enh==='Grand Strategist').length;
+  return n;
+}
+// At the start of this player's Command phase, all Orders they issued last round expire; bonuses are cleared.
+function clearOrders(p){
+  Object.keys(unitOrders[p]).forEach(id=>{const u=units.find(x=>x.id===id);if(u){u._orderMove=0;u._orderOc=0;u._orderLd=0;}});
+  unitOrders[p]={};ordersIssued[p]=0;
+}
+// Combat contribution of a unit's active Order (attacker side).
+function orderCombatMods(u,isMelee,m){
+  const id=unitOrder(u);if(!id)return;
+  if(id==='bayonets'&&isMelee)m.addHit+=1;             // Fix Bayonets!: +1 WS
+  if(id==='aim'&&!isMelee)m.addHit+=1;                 // Take Aim!: +1 BS
+  if(id==='firstrank'&&!isMelee)m.plusAttacksRanged+=1; // First Rank, Fire!: +1 Attack (Rapid Fire abstracted to all ranged)
+}
+// Defensive contribution (Take Cover! improves the save → modelled as worsenSave -1, capped so it can't beat 3+).
+function orderDefMods(u,m){
+  const id=unitOrder(u);if(id==='cover'&&u){if(u.sv>3)m.worsenSave-=1;}  // +1 Save, but not better than 3+
+}
+// Auto-issue Orders for the AI/headless flow: each officer in range buffs a nearby eligible unit.
+function autoIssueOrders(p){
+  if(!isAstraArmy(p))return;
+  let budget=orderBudgetFor(p);if(budget<=0)return;
+  const R=orderRangeFor(p);
+  const officers=units.filter(u=>u.player===p&&!u.dead&&u.deployed&&isOfficer(u));
+  const targets=units.filter(u=>u.player===p&&!u.dead&&u.deployed&&!u.bshock&&unitHasKw(u,'ASTRA MILITARUM')&&!isOfficer(u));
+  officers.forEach(of=>{
+    const near=targets.filter(t=>dist(of,t)<=R&&!unitOrders[p][t.id]);
+    near.sort((a,b)=>dist(of,a)-dist(of,b));
+    let give=Math.max(1,Math.ceil(budget/Math.max(1,officers.length)));
+    near.slice(0,give).forEach(t=>{
+      if(budget<=0)return;
+      // pick an order: shooty units get Take Aim!, melee-leaning get Fix Bayonets!, else Take Cover!
+      const hasRanged=(t.ranged||[]).length>0;
+      const oid=hasRanged?'aim':((t.melee||[]).some(w=>w.a>=3)?'bayonets':'cover');
+      if(issueOrder(of,t,oid))budget--;
+    });
+  });
+}
 function grantBattleFocus(p){
   // Start of battle round: refresh the Battle Focus pool (unspent tokens are lost). +1 for Warhost's
   // Martial Grace, +1 if a Timeless Strategist enhancement is present on the army.
@@ -2659,6 +2912,7 @@ function renderAction(){
       const w=a.u.ranged[a.weapon];
       const er=inER(a.u);
       let tg=units.filter(e=>!e.dead&&e.player!==a.u.player&&dist(a.u,e)<=w.rng&&visible(a.u,e));
+      tg=tg.filter(e=>!unitIsLoneOp(e)||dist(a.u,e)<=12);   // Lone Operative: only targetable from within 12"
       if(er)tg=tg.filter(e=>engaged(a.u,e));
       h+=`<div class="apSub">2 · Pick a target (in range &amp; sight)</div>`;
       if(!tg.length)h+=`<p class="apNote">No valid target for this weapon.</p>`;
@@ -2778,7 +3032,15 @@ function renderDetail(){
   const u=units.find(x=>x.id===selId);const el=$('detail');
   if(!u){el.innerHTML='No unit selected.';return;}
   const row=w=>`<div class="wpn"><span class="wn">${w.name}${abLabel(w)?`<span class="ab">${abLabel(w)}</span>`:''}</span><span>${w.type==='M'?'Melee':w.rng+'"'} A${w.a} ${w.skill}+ S${w.s} AP${w.ap} D${w.d}</span></div>`;
-  const abrow=a=>`<div class="abRow"><b>${a.name}</b> <span class="abType">${a.type}</span><div class="abDesc">${a.desc||''}</div></div>`;
+  const abMap=(typeof ABILITY_FX!=='undefined'&&u.tpl)?ABILITY_FX[u.tpl]:null;
+  const coreMap=(typeof CORE_FX!=='undefined')?CORE_FX:null;
+  const abApplied=a=>{
+    const dm=abMap&&abMap[normAbil(a.name)];
+    if(dm&&dm.some(f=>f.k!=='note'))return true;
+    if((a.type||'')==='Core'&&coreMap){const cf=coreMap[normAbil(a.name)];if(cf&&cf.some(f=>f.k!=='note'))return true;}
+    return normAbil(a.name)==='loneoperative';   // enforced in engine code, not as an fx
+  };
+  const abrow=a=>{const applied=abApplied(a);return `<div class="abRow"><b>${a.name}</b> <span class="abType">${a.type}</span>${applied?' <span class="abType" style="background:#3a2d4d;color:#caa">✦ engine</span>':''}<div class="abDesc">${a.desc||''}</div></div>`;};
   el.innerHTML=`<h3>${u.name} ${u.kw.includes('CHARACTER')?'✠':''}</h3>
     <div class="statline">${PNAME[u.player]} · ${u.kw.join(', ')} · <b>${u.pts} pts</b></div>
     <div class="statline">${u.models}/${u.maxModels} models · ${totalWounds(u)}/${maxWounds(u)} wounds${u.bshock?' · <b style="color:var(--blood2)">BATTLE-SHOCKED</b>':''}</div>
@@ -2958,6 +3220,7 @@ function autoResolvePhase(){
       const er=inER(u);
       u.ranged.forEach((w,i)=>{if(u.advanced&&!w.ab.assault)return;if(er&&!w.ab.pistol)return;
         let tg=units.filter(e=>!e.dead&&e.player!==turn&&dist(u,e)<=w.rng&&visible(u,e));if(er)tg=tg.filter(e=>engaged(u,e));
+        tg=tg.filter(e=>!unitIsLoneOp(e)||dist(u,e)<=12);   // Lone Operative: only targetable from within 12"
         if(!tg.length)return;tg.sort((a,b)=>dist(u,a)-dist(u,b));resolveAttacks(u,tg[0],w,u.models,false);});});
   }else if(ph==="Charge"){
     units.filter(u=>u.player===turn&&!u.dead&&!u.advanced&&!u.fellback&&!inER(u)).forEach(u=>{
@@ -2966,11 +3229,30 @@ function autoResolvePhase(){
       log("",`${u.name} charges ${tg[0].name}: 2D6=<b>${roll}″</b> (need ${need.toFixed(1)}″)`);
       if(roll>=need){moveAdjacent(u,tg[0]);u.charged=true;log("save","&nbsp;&nbsp;Success.");}else log("miss","&nbsp;&nbsp;Failed.");});
   }else if(ph==="Fight"){
-    const fighters=units.filter(u=>!u.dead&&inER(u));const chargers=fighters.filter(u=>u.charged);const rest=fighters.filter(u=>!u.charged);
-    const ordered=[...chargers];let tg=turn===1?2:1;const byP={1:rest.filter(u=>u.player===1),2:rest.filter(u=>u.player===2)};
-    while(byP[1].length||byP[2].length){if(byP[tg].length)ordered.push(byP[tg].shift());tg=tg===1?2:1;}
-    ordered.forEach(u=>{if(u.dead)return;const t=units.filter(e=>!e.dead&&e.player!==u.player&&engaged(u,e));if(!t.length||!u.melee.length)return;
-      resolveAttacks(u,t[0],u.melee[0],u.models,false);u.fought=true;});
+    // Two-step Fight phase per the Core Rules. Step 1 (Fights First): units that made a Charge move OR have the
+    // Fights First ability. Step 2 (Remaining Combats): everyone else. In each step players ALTERNATE selecting an
+    // eligible unit, starting with the player whose turn is NOT taking place. Eligibility is re-checked as units die.
+    const nonActive=turn===1?2:1;
+    function fightStep(filterFn){
+      let starter=nonActive;
+      let guard=0;
+      while(guard++<200){
+        // units still eligible this step: alive, in Engagement Range (or charged), haven't fought, and match the step filter
+        const elig=units.filter(u=>!u.dead&&!u.fought&&(inER(u)||u.charged)&&u.melee.length&&filterFn(u));
+        if(!elig.length)break;
+        // pick the starter player's unit if any remain eligible; otherwise the other player's
+        let pick=elig.find(u=>u.player===starter) || elig.find(u=>u.player!==starter);
+        if(!pick)break;
+        pileInMove(pick);                                   // 1. Pile In (3" toward closest enemy)
+        const t=units.filter(e=>!e.dead&&e.player!==pick.player&&engaged(pick,e));
+        if(t.length){t.sort((a,b)=>dist(pick,a)-dist(pick,b));resolveAttacks(pick,t[0],pick.melee[0],pick.models,false);}
+        pick.fought=true;
+        if(!pick.dead)consolidateMove(pick);                // 3. Consolidate (toward enemy, else objective)
+        starter=starter===1?2:1;   // alternate
+      }
+    }
+    fightStep(u=>unitFightsFirst(u));    // Step 1: Fights First (chargers + ability)
+    fightStep(u=>!unitFightsFirst(u));   // Step 2: Remaining Combats
   }
   advancePhase();
 }

@@ -98,6 +98,180 @@ let cv,ctx,logEl;
 let action=null;   // {kind:'advance'|'shoot'|'charge'|'fight', ...}
 
 /* ===================================================================
+   DETACHMENT SYSTEM  (faction-agnostic; data in detachments.js)
+   =================================================================== */
+let pDetach={1:null,2:null};        // chosen detachment name per player
+let activeDoctrine={1:null,2:null}; // current army doctrine id per player (Gladius/Librarius etc.)
+let usedDoctrines={1:[],2:[]};      // doctrines already chosen this battle
+let unitDoctrine={};                // unitId -> doctrine id (Adaptive Strategy etc.)
+let oathTarget={1:null,2:null};     // enemy unitId named as Oath of Moment
+let stratState={};                  // transient stratagem flags, keyed per-unit/phase
+let firstCoyActive={1:false,2:false};
+let pendingStrat=null;              // a stratagem awaiting target selection
+
+function factionDataFor(p){
+  // resolve the player's faction to a DETACHMENT_DATA bucket (Space Marines covers all chapters)
+  const f=FACTIONS[pFaction[p]];if(!f)return null;
+  if(f.isSM||/space marines|adeptus astartes|ultramarines|blood angels|dark angels|space wolves|black templars|deathwatch|imperial fists|crimson fists|iron hands|salamanders|raven guard|white scars/i.test(f.name))
+    return DETACHMENT_DATA["Space Marines"];
+  return DETACHMENT_DATA[f.name]||null;
+}
+function detachOf(p){const d=factionDataFor(p);if(!d||!pDetach[p])return null;return d.detachments[pDetach[p]];}
+function armyRuleOf(p){const d=factionDataFor(p);return d?d.armyRule:null;}
+
+function unitHasKw(u,kw){return (u.kw||[]).includes(kw)||(u.allKw||[]).includes(kw);}
+function unitOnObjective(u){return objectives.some(o=>Math.hypot(o.hx-u.hx,o.hy-u.hy)<=1.5);}
+
+/* Evaluate one fx condition string for an attack context. */
+function condMet(cond,ctx){
+  if(!cond)return true;
+  return cond.split('+').every(c=>oneCond(c,ctx));
+}
+function oneCond(c,ctx){
+  const {att,def,weapon,isMelee,p}=ctx;
+  switch(c){
+    case 'targetIsOath': return def&&oathTarget[p]===def.id;
+    case 'codexPure': { // army has no divergent-chapter units
+      const div=['BLACK TEMPLARS','BLOOD ANGELS','DARK ANGELS','DEATHWATCH','SPACE WOLVES'];
+      return !units.some(u=>u.player===p&&!u.dead&&(u.allKw||[]).some(k=>div.includes(k)));
+    }
+    case 'firstCoyActive': return firstCoyActive[p];
+    case 'within12': return def&&dist(att,def)<=12;
+    case 'targetBeyond12': return def&&dist(att,def)>12;
+    case 'attackerBeyond12': return att&&def&&dist(att,def)>12; // used defensively (att=enemy)
+    case 'remainedStationary': return att&&!att.moved&&!att.advanced&&!att.fellback;
+    case 'alreadyHeavy': return weapon&&weapon.ab&&weapon.ab.heavy;
+    case 'remainedStationary+alreadyHeavy': return true; // handled via split
+    case 'targetMonsterVehicle': return def&&(unitHasKw(def,'MONSTER')||unitHasKw(def,'VEHICLE'));
+    case 'targetCMV': return def&&(unitHasKw(def,'CHARACTER')||unitHasKw(def,'MONSTER')||unitHasKw(def,'VEHICLE'));
+    case 'targetCharacter': return def&&unitHasKw(def,'CHARACTER');
+    case 'targetBelowStrength': return def&&totalWounds(def)<maxWounds(def);
+    case 'selfBelowHalf': return att&&belowHalf(att);
+    case 'inTerrain': return att&&hasCover(att,att); // approx: in/near terrain
+    case 'unitBattleline': return att&&unitHasKw(att,'BATTLELINE');
+    case 'psykerOnly': return att&&unitHasKw(att,'PSYKER');
+    case 'torrentOnly': return weapon&&weapon.ab&&weapon.ab.torrent;
+    case 'alreadyAssault': return weapon&&weapon.ab&&weapon.ab.assault;
+    case 'targetWithinObjective': return def&&unitOnObjective(def);
+    case 'selfOnHeldObjective': return att&&unitOnObjective(att);
+    case 'strHigherThanT': return att&&def&&weapon&&(weapon.s+0)>def.t;
+    case 'strGEQT': return att&&def&&weapon&&(weapon.s+0)>=def.t;
+    case 'doctrine:assault': return doctrineActiveFor(p)==='assault';
+    case 'doctrine:devastator': return doctrineActiveFor(p)==='devastator';
+    case 'doctrine:tactical': return doctrineActiveFor(p)==='tactical';
+    case 'doctrine:divination': return doctrineActiveFor(p)==='divination';
+    case 'doctrine:pyromancy': return doctrineActiveFor(p)==='pyromancy';
+    case 'doctrine:biomancy': return doctrineActiveFor(p)==='biomancy';
+    case 'closestWithin6': return def&&dist(att,def)<=6; // approx (closest not tracked)
+    case 'closestWithin12': return def&&dist(att,def)<=12;
+    case 'targetScanned': return def&&def._scanned;
+    case 'setUpThisTurn': return att&&att._setupThisTurn;
+    case 'dropPodThisTurn': return false;
+    case 'disembarkedHeavy': return false;
+    case 'tankAceStationaryish': return att&&unitHasKw(att,'VEHICLE')&&!att.advanced;
+    default: return true;
+  }
+}
+function doctrineActiveFor(p){
+  // a unit-specific doctrine overrides; else the army doctrine
+  return activeDoctrine[p];
+}
+
+/* Build the modifier object consulted by resolveAttacks.
+   ctx player = attacker's player; also folds in DEFENDER's defensive stratagems. */
+function gatherCombatMods(att,def,weapon,isMelee){
+  const p=att.player, ep=def.player;
+  const m={addHit:0,addWound:0,plusAttacksMelee:0,plusStrMelee:0,plusStrRanged:0,
+    plusApMelee:0,plusApRanged:0,rerollHit:0,rerollWound:0,worsenIncomingAP:0,
+    reduceIncomingDmg:0,subIncomingHit:0,subIncomingWound:0,ignoresCover:false,grantCoverDef:false,
+    grantSustained:0,grantLethal:false,grantDevastating:false,grantLance:false,grantIgnoresCover:false,
+    grantPrecision:false,grantAssault:false,antiKw:null,critOn:0,defFnp:0,defInvuln:0,notes:[]};
+  const ctx={att,def,weapon,isMelee,p};
+  const ectx={att:def,def:att,weapon,isMelee,p:ep}; // for defender-side conditions
+
+  // ---- attacker-side: army rule + detachment rule + active doctrine + enhancements + active stratagems
+  collectFx(att,p,ctx,m,'attack');
+  // unit-attached enhancement on a leader within the unit is modeled per-unit (att.enh)
+  // ---- defender-side: defensive effects (Armour of Contempt, -1 to be hit/wound, FNP, invuln)
+  collectFx(def,ep,ectx,m,'defend');
+
+  // doctrine note for log
+  const dn=doctrineActiveFor(p);
+  if(rerollText(m))m.note=rerollText(m);
+  return m;
+}
+function rerollText(m){const t=[];if(m.rerollHit==='all')t.push('rr hit');else if(m.rerollHit===1)t.push('rr hit 1s');
+  if(m.rerollWound==='all')t.push('rr wnd');else if(m.rerollWound===1)t.push('rr wnd 1s');
+  if(m.addHit)t.push('+'+m.addHit+' hit');if(m.addWound)t.push('+'+m.addWound+' wnd');
+  if(m.grantSustained)t.push('SUS'+m.grantSustained);if(m.grantLethal)t.push('LETH');if(m.grantLance)t.push('LANCE');
+  if(m.worsenIncomingAP)t.push('-AP def');if(m.defFnp)t.push('FNP'+m.defFnp);
+  return t.join(', ');
+}
+function applyFxList(fxArr,ctx,m,side,sourceUnit){
+  if(!fxArr)return;
+  fxArr.forEach(fx=>{
+    if(!condMet(fx.cond,ctx))return;
+    // selfOnly fx apply only when the source unit IS the acting unit
+    if(fx.selfOnly && sourceUnit && ctx.att && sourceUnit.id!==ctx.att.id && side==='attack')return;
+    const isDef=side==='defend';
+    switch(fx.k){
+      case 'addHit': if(!isDef)m.addHit+=fx.n; break;
+      case 'addWound': if(!isDef)m.addWound+=fx.n; break;
+      case 'plusAttacksMelee': if(!isDef)m.plusAttacksMelee+=fx.n; break;
+      case 'plusStrMelee': if(!isDef)m.plusStrMelee+=fx.n; break;
+      case 'plusStrRanged': if(!isDef)m.plusStrRanged+=fx.n; break;
+      case 'plusApMelee': if(!isDef)m.plusApMelee+=fx.n; break;
+      case 'plusApRanged': if(!isDef)m.plusApRanged+=fx.n; break;
+      case 'rerollHit': if(!isDef)m.rerollHit=mergeRR(m.rerollHit,fx.val); break;
+      case 'rerollWound': if(!isDef)m.rerollWound=mergeRR(m.rerollWound,fx.val); break;
+      case 'grant': if(!isDef){const a=fx.ab;
+        if(a==='sustained')m.grantSustained=Math.max(m.grantSustained,fx.val||1);
+        if(a==='lethal')m.grantLethal=true;if(a==='devastating')m.grantDevastating=true;
+        if(a==='lance')m.grantLance=true;if(a==='ignorescover'){m.grantIgnoresCover=true;m.ignoresCover=true;}
+        if(a==='precision')m.grantPrecision=true;if(a==='assault')m.grantAssault=true;} break;
+      case 'antiVal': if(!isDef)m.antiKw={kw:fx.kw,val:fx.val}; break;
+      case 'critOn': if(!isDef)m.critOn=fx.val; break;
+      // defensive (apply when this unit is the DEFENDER)
+      case 'worsenIncomingAP': if(isDef)m.worsenIncomingAP+=fx.n; break;
+      case 'reduceIncomingDmg': if(isDef)m.reduceIncomingDmg+=fx.n; break;
+      case 'subIncomingHit': if(isDef)m.subIncomingHit+=fx.n; break;
+      case 'subIncomingWound': if(isDef)m.subIncomingWound+=fx.n; break;
+      case 'grantCoverDef': if(isDef)m.grantCoverDef=true; break;
+      case 'fnp': if(isDef)m.defFnp=m.defFnp?Math.min(m.defFnp,fx.val):fx.val; break;
+      case 'invuln': if(isDef)m.defInvuln=m.defInvuln?Math.min(m.defInvuln,fx.val):fx.val; break;
+    }
+  });
+}
+function mergeRR(cur,val){if(cur==='all'||val==='all')return 'all';return Math.max(cur||0,val||0);}
+
+/* Collect all active fx for a unit's player from rule + doctrine + enhancements + active stratagems. */
+function collectFx(unit,p,ctx,m,side){
+  const fd=factionDataFor(p);if(!fd)return;
+  const det=detachOf(p);
+  // army rule
+  if(fd.armyRule)applyFxList(fd.armyRule.fx,ctx,m,side);
+  // detachment rule
+  if(det&&det.rule)applyFxList(det.rule.fx,ctx,m,side);
+  // active doctrine
+  const dId=doctrineActiveFor(p);
+  if(det&&det.doctrines&&dId){const doc=det.doctrines.find(d=>d.id===dId);if(doc)applyFxList(doc.fx,ctx,m,side);}
+  // enhancements present on units of this player (leader buffs whole unit; selfOnly handled in applyFxList)
+  if(det&&det.enhancements){
+    units.filter(u=>u.player===p&&!u.dead&&u.enh).forEach(src=>{
+      const e=det.enhancements.find(x=>x.name===src.enh);
+      if(!e)return;
+      // enhancement applies to the bearer's unit; here unit granularity = the bearer unit itself
+      if(side==='attack' && ctx.att && ctx.att.id!==src.id) return; // only bearer's unit benefits (we model unit=bearer)
+      if(side==='defend' && ctx.att && ctx.att.id!==src.id) return;
+      applyFxList(e.fx,ctx,m,side,src);
+    });
+  }
+  // active stratagems (flags set on units)
+  const sg=side==='attack'?unit._stratAtk:unit._stratDef;
+  if(sg&&det&&det.stratagems){sg.forEach(sn=>{const s=det.stratagems.find(x=>x.name===sn);if(s)applyFxList(s.fx,ctx,m,side);});}
+}
+
+/* ===================================================================
    PERSISTENT STORAGE  (localStorage)  +  remote fetch (Netlify fn / proxy)
    =================================================================== */
 const LS_KEY='voidstrike_data_v1';
@@ -496,7 +670,26 @@ function renderFacSelectors(){
     sel.onchange=()=>{pFaction[p]=sel.value;roster[p]={};
       const col=$('col'+p),c=FACTIONS[pFaction[p]].color;
       col.classList.remove('imp','cha');col.classList.add(c==='cha'?'cha':'imp');
-      renderShops();};
+      pDetach[p]=null;renderDetachSelectors();renderShops();};
+  });
+  renderDetachSelectors();
+}
+function renderDetachSelectors(){
+  [1,2].forEach(p=>{
+    const sel=$('detSel'+p);if(!sel)return;sel.innerHTML='';
+    const fd=factionDataFor(p);
+    if(!fd||!fd.detachments){const o=document.createElement('option');o.textContent='— none available —';o.value='';sel.appendChild(o);pDetach[p]=null;return;}
+    const names=Object.keys(fd.detachments);
+    // if current faction is a specific chapter, list chapter-specific detachments first, hide other chapters' exclusives
+    const chap=FACTIONS[pFaction[p]]&&FACTIONS[pFaction[p]].chapter;
+    const none=document.createElement('option');none.textContent='— choose detachment —';none.value='';sel.appendChild(none);
+    names.forEach(n=>{
+      const d=fd.detachments[n];
+      if(d.chapter&&chap&&d.chapter!==chap)return;  // hide other chapters' named detachments
+      const o=document.createElement('option');o.value=n;o.textContent=n+(d.chapter?` (${d.chapter[0]+d.chapter.slice(1).toLowerCase()})`:'');
+      if(n===pDetach[p])o.selected=true;sel.appendChild(o);
+    });
+    sel.onchange=()=>{pDetach[p]=sel.value||null;};
   });
 }
 function rosterPts(p){return Object.entries(roster[p]).reduce((s,[k,q])=>s+((TEMPLATES[k]?.pts||0)*q),0);}
@@ -562,11 +755,11 @@ function quickMuster(){
    =================================================================== */
 function newUnit(tplKey,player){
   const t=TEMPLATES[tplKey];
-  return {id:crypto.randomUUID(),tpl:tplKey,name:t.name,player,kw:[...t.kw],
+  return {id:crypto.randomUUID(),tpl:tplKey,name:t.name,player,kw:[...t.kw],allKw:[...(t.allKw||t.kw||[])],
     m:t.m,t:t.t,sv:t.sv,inv:t.inv,w:t.w,ld:t.ld,oc:t.oc,pts:t.pts,abilities:t.abilities||[],
-    maxModels:t.models,models:t.models,woundsLeft:t.w,ranged:t.ranged,melee:t.melee,
+    maxModels:t.models,models:t.models,woundsLeft:t.w,ranged:t.ranged,melee:t.melee,enh:null,
     hx:-1,hy:-1,deployed:false,moved:false,advanced:false,fellback:false,charged:false,fought:false,
-    shotWith:[],bshock:false,dead:false};
+    shotWith:[],bshock:false,dead:false,_stratAtk:[],_stratDef:[],_ocBonus:0,_ocMult:1};
 }
 function totalWounds(u){return (u.models-1)*u.w+u.woundsLeft;}
 function maxWounds(u){return u.maxModels*u.w;}
@@ -582,6 +775,8 @@ function buildBattle(){
   units=[];objectives=[];walls=[];hatchways=[];
   vp={1:0,2:0};cp={1:1,2:1};round=1;turn=1;phaseIdx=0;selId=null;action=null;
   phaseDone=[false,false,false,false,false];
+  activeDoctrine={1:null,2:null};usedDoctrines={1:[],2:[]};unitDoctrine={};
+  oathTarget={1:null,2:null};firstCoyActive={1:false,2:false};pendingStrat=null;
 
   [1,2].forEach(p=>Object.entries(roster[p]).forEach(([k,q])=>{for(let i=0;i<q;i++)units.push(newUnit(k,p));}));
 
@@ -736,54 +931,98 @@ function hasCover(att,def){
 
 /* Resolve a full attack sequence (used by auto-resolve & by manual roll). Returns a report. */
 function resolveAttacks(att,def,weapon,nModels,silent){
-  let perModel=weapon.a;
-  if(weapon.ab.rapidfire&&weapon.type==="R"&&dist(att,def)<=weapon.rng/2)perModel+=weapon.ab.rapidfire;
+  const isMelee=weapon.type==='M';
+  // Gather detachment/doctrine/stratagem/enhancement modifiers for this attack
+  const mods=(typeof gatherCombatMods==='function')?gatherCombatMods(att,def,weapon,isMelee):null;
+  // effective weapon abilities (granted abilities merged in)
+  const ab=Object.assign({},weapon.ab);
+  if(mods){if(mods.grantSustained&&!ab.sustained)ab.sustained=mods.grantSustained;
+    if(mods.grantLethal)ab.lethal=true;if(mods.grantDevastating)ab.devastating=true;
+    if(mods.grantLance)ab.lance=true;if(mods.grantIgnoresCover)ab.ignorescover=true;
+    if(mods.grantPrecision)ab.precision=true;
+    if(mods.grantAssault)ab.assault=true;
+    if(mods.antiKw&&def.kw.includes(mods.antiKw.kw)){if(!ab.anti||ab.anti.val>mods.antiKw.val)ab.anti={kw:mods.antiKw.kw,val:mods.antiKw.val};}}
+  let perModel=weapon.a + (isMelee&&mods?mods.plusAttacksMelee:0);
+  if(ab.rapidfire&&weapon.type==="R"&&dist(att,def)<=weapon.rng/2)perModel+=ab.rapidfire;
+  if(perModel<1)perModel=1;
   let attacks=perModel*nModels;
-  if(!silent)log("",`<span class="roll">${att.name}</span> ▸ <span class="roll">${def.name}</span> · ${weapon.name} · <b>${attacks}</b> attacks`);
-  const skill=weapon.skill;
+  const wStr=weapon.s + (mods?(isMelee?mods.plusStrMelee:mods.plusStrRanged):0);
+  const wAp=weapon.ap - (mods?(isMelee?mods.plusApMelee:mods.plusApRanged):0); // ap stored negative; subtract to improve
+  const skill=clamp(weapon.skill - (mods?mods.addHit:0),2,6);
+  if(!silent){let line=`<span class="roll">${att.name}</span> ▸ <span class="roll">${def.name}</span> · ${weapon.name} · <b>${attacks}</b> attacks`;
+    if(mods&&mods.note)line+=` <span class="sys">[${mods.note}]</span>`;log("",line);}
   let hits=0,critHits=0,autoWounds=0,sustainExtra=0;const hitDice=[];
-  if(weapon.ab.torrent){hits=attacks;if(!silent)log("hit","&nbsp;&nbsp;TORRENT — auto-hits.");}
+  const critHitOn=mods&&mods.critOn?mods.critOn:6;
+  const rerollHit=mods?mods.rerollHit:0;   // 0 | 1 | 'all'
+  if(ab.torrent){hits=attacks;if(!silent)log("hit","&nbsp;&nbsp;TORRENT — auto-hits.");}
   else{
-    for(let i=0;i<attacks;i++){const r=d6();const crit=r===6;const ok=(r>=skill||crit)&&r!==1;
+    for(let i=0;i<attacks;i++){let r=d6();
+      if(((rerollHit==='all'&&r<skill)||(rerollHit===1&&r===1))&&r!==6)r=d6();
+      const crit=r>=critHitOn;const ok=(r>=skill||crit)&&r!==1;
       hitDice.push({v:r,crit:true,fail:true,ok});
-      if(ok){hits++;if(crit){critHits++;if(weapon.ab.lethal)autoWounds++;if(weapon.ab.sustained)sustainExtra+=weapon.ab.sustained;}}}
+      if(ok){hits++;if(crit){critHits++;if(ab.lethal)autoWounds++;if(ab.sustained)sustainExtra+=ab.sustained;}}}
     if(!silent){logDice(hitDice);let m=`&nbsp;&nbsp;Hits: <span class="hit">${hits}</span> (${skill}+)`;
       if(critHits)m+=` · <span class="crit">${critHits} crit</span>`;if(sustainExtra)m+=` · SUSTAINED +${sustainExtra}`;
-      if(weapon.ab.lethal&&autoWounds)m+=` · LETHAL ${autoWounds}`;log("",m);}
+      if(ab.lethal&&autoWounds)m+=` · LETHAL ${autoWounds}`;log("",m);}
   }
   let woundAttempts=hits+sustainExtra-autoWounds;if(woundAttempts<0)woundAttempts=0;
-  const wt=woundTarget(weapon.s,def.t);let wounds=autoWounds,devastating=0;const woundDice=[];
-  let antiOn=7;if(weapon.ab.anti&&def.kw.includes(weapon.ab.anti.kw))antiOn=weapon.ab.anti.val;
-  for(let i=0;i<woundAttempts;i++){let r=d6();if(weapon.ab.twinlinked&&r<wt&&r!==6)r=d6();
-    const crit=(r===6)||(r>=antiOn);const ok=(r>=wt||crit)&&r!==1;woundDice.push({v:r,crit:true,fail:true,ok});
-    if(ok){wounds++;if(crit&&weapon.ab.devastating)devastating++;}}
+  let wt=woundTarget(wStr,def.t);
+  // wound roll modifier (clamped; net +/-1 cap is approximated by direct add)
+  const woundMod=mods?(mods.addWound - mods.subIncomingWound):0;
+  let wounds=autoWounds,devastating=0;const woundDice=[];
+  let antiOn=7;if(ab.anti&&def.kw.includes(ab.anti.kw))antiOn=ab.anti.val;
+  const rerollWound=mods?mods.rerollWound:0;
+  for(let i=0;i<woundAttempts;i++){let r=d6();
+    if(((rerollWound==='all'&&r<wt)||(rerollWound===1&&r===1))&&r!==6)r=d6();
+    if(ab.twinlinked&&r<wt&&r!==6)r=d6();
+    const eff=clamp(r+woundMod,1,6);
+    const crit=(r===6)||(eff>=antiOn)||(r>=antiOn);const ok=(eff>=wt||crit)&&r!==1;woundDice.push({v:r,crit:true,fail:true,ok});
+    if(ok){wounds++;if(crit&&ab.devastating)devastating++;}}
   if(!silent){logDice(woundDice);let wm=`&nbsp;&nbsp;Wounds: <span class="wound">${wounds}</span> (${wt}+`;
-    if(weapon.ab.twinlinked)wm+=`, twin-linked`;wm+=`)`;if(devastating)wm+=` · <span class="crit">DEVASTATING ${devastating}</span>`;log("",wm);}
+    if(woundMod)wm+=`, ${woundMod>0?'+':''}${woundMod}`;if(ab.twinlinked)wm+=`, TL`;wm+=`)`;
+    if(devastating)wm+=` · <span class="crit">DEVASTATING ${devastating}</span>`;log("",wm);}
   let normalWounds=wounds-devastating;if(normalWounds<0)normalWounds=0;
-  let failed=0;const saveDice=[];const cover=hasCover(att,def)&&weapon.type==="R";const apMod=-weapon.ap;
-  const useInv=def.inv>0&&def.inv<(def.sv+apMod+(cover&&!(def.sv<=3&&weapon.ap===0)?1:0));
+  let failed=0;const saveDice=[];
+  let cover=hasCover(att,def)&&weapon.type==="R";
+  if(mods&&mods.ignoresCover)cover=false;
+  if(mods&&mods.grantCoverDef&&weapon.type==='R')cover=true;
+  let apEff=-wAp;                                  // positive number = penalty to save
+  if(mods)apEff=Math.max(0,apEff-mods.worsenIncomingAP*0)+0; // (incoming AP worsen handled below for defender)
+  // defender AP worsening (Armour of Contempt etc.) reduces attacker AP
+  let apPenalty=-wAp - (mods?mods.worsenIncomingAP:0);
+  const useInv=def.inv>0 && def.inv < (def.sv+apPenalty+(cover&&!(def.sv<=3&&wAp===0)?1:0));
+  const invUsed=mods&&mods.defInvuln?Math.min(def.inv||7,mods.defInvuln):def.inv;
   for(let i=0;i<normalWounds;i++){let r=d6();let need;
-    if(useInv)need=def.inv;else{let mod=apMod;if(cover&&!(def.sv<=3&&weapon.ap===0))mod+=1;need=def.sv-mod;}
+    if(useInv)need=invUsed||def.inv;
+    else{let mod=apPenalty;if(cover&&!(def.sv<=3&&wAp===0))mod+=1;need=def.sv-mod;}
     const saved=(r>=need)&&r!==1;saveDice.push({v:r,fail:true,ok:saved,bad:!saved});if(!saved)failed++;}
   if(!silent){logDice(saveDice);let sm=`&nbsp;&nbsp;Saves: <span class="save">${normalWounds-failed} saved</span>`;
-    if(cover)sm+=` (cover)`;if(useInv)sm+=` (invuln ${def.inv}+)`;log("",sm);}
-  const totalDamage=failed*weapon.d,mortal=devastating*weapon.d;
+    if(cover)sm+=` (cover)`;if(useInv)sm+=` (invuln ${invUsed||def.inv}+)`;log("",sm);}
+  let perHit=weapon.d - (mods?mods.reduceIncomingDmg:0);if(perHit<1)perHit=1;
+  const totalDamage=failed*perHit,mortal=devastating*perHit;
   if(!silent&&mortal)log("",`&nbsp;&nbsp;Mortal wounds: <span class="kill">${mortal}</span>`);
-  applyDamage(def,totalDamage,weapon.d,mortal,silent);
-  if(weapon.ab.hazardous){const haz=[];let fails=0;
+  // Feel No Pain (defender)
+  const fnp=mods&&mods.defFnp?mods.defFnp:0;
+  applyDamage(def,totalDamage,perHit,mortal,silent,fnp);
+  if(ab.hazardous){const haz=[];let fails=0;
     for(let i=0;i<nModels;i++){const r=d6();haz.push({v:r,fail:true,bad:r===1,ok:r!==1});if(r===1)fails++;}
     if(!silent){log("",`&nbsp;&nbsp;<span style="color:var(--blood2)">HAZARDOUS</span>: ${fails} failed`);logDice(haz);}
     if(fails){const mw=fails*3;if(!silent)log("kill",`&nbsp;&nbsp;${att.name} takes <span class="kill">${mw}</span> mortal (Hazardous)!`);applyDamage(att,0,0,mw,silent);}}
   return {attacks,hits,wounds,failed,devastating};
 }
-function applyDamage(u,normalDamage,dPerHit,mortal,silent){
+function applyDamage(u,normalDamage,dPerHit,mortal,silent,fnp){
   const before=totalWounds(u);
-  if(dPerHit>0&&normalDamage>0){const hits=Math.round(normalDamage/dPerHit);for(let h=0;h<hits;h++)dmgChunk(u,dPerHit,false);}
-  for(let m=0;m<mortal;m++)dmgChunk(u,1,true);
+  // Feel No Pain: roll for each wound that would be lost
+  function fnpFilter(dmg){
+    if(!fnp)return dmg;let kept=0;for(let i=0;i<dmg;i++){if(d6()<fnp)kept++;}return kept;
+  }
+  if(dPerHit>0&&normalDamage>0){const hits=Math.round(normalDamage/dPerHit);
+    for(let h=0;h<hits;h++){const dealt=fnpFilter(dPerHit);for(let x=0;x<dealt;x++)dmgChunk(u,1,true);}}
+  if(mortal){const m2=fnpFilter(mortal);for(let m=0;m<m2;m++)dmgChunk(u,1,true);}
   const lost=before-totalWounds(u);
   if(silent)return;
   if(u.dead)log("kill",`&nbsp;&nbsp;☠ ${u.name} DESTROYED!`);
-  else if(lost>0)log("",`&nbsp;&nbsp;${u.name} −<span class="kill">${lost}</span>W · ${u.models} model(s) left.`);
+  else if(lost>0)log("",`&nbsp;&nbsp;${u.name} −<span class="kill">${lost}</span>W${fnp?' (after FNP '+fnp+'+)':''} · ${u.models} model(s) left.`);
   else log("miss",`&nbsp;&nbsp;${u.name} unharmed.`);
 }
 function dmgChunk(u,dmg,spill){let rem=dmg;
@@ -801,12 +1040,14 @@ function beginPhase(){
   action=null;showActionPanel(false);
   const ph=PHASES[phaseIdx];
   $('tPhase').textContent=ph.toUpperCase();
+  // clear per-phase stratagem flags
+  units.forEach(u=>{u._stratAtk=[];u._stratDef=[];});
   if(ph==="Command")doCommandPhase();
   if(ph==="Movement")units.forEach(u=>{if(u.player===turn){u.moved=false;u.advanced=false;u.fellback=false;}});
   if(ph==="Shooting")units.forEach(u=>{if(u.player===turn)u.shotWith=[];});
   if(ph==="Charge")units.forEach(u=>{if(u.player===turn)u.charged=false;});
   if(ph==="Fight")units.forEach(u=>u.fought=false);
-  updateHint();renderPhases();renderAll();render();
+  updateHint();renderPhases();renderAll();render();renderStratPanel();
 }
 function doCommandPhase(){
   log("hd",`◆ R${round} · ${PNAME[turn].toUpperCase()} · COMMAND`);
@@ -816,7 +1057,109 @@ function doCommandPhase(){
     log("",`Battle-shock ${u.name}: <b>${r}</b> vs LD${u.ld} — ${pass?'<span class="save">PASS</span>':'<span class="kill">FAIL · shocked</span>'}`);
     u.bshock=!pass;});
   units.filter(u=>u.player===turn&&!belowHalf(u)).forEach(u=>u.bshock=false);
-  phaseDone[0]=true;renderAll();
+  phaseDone[0]=true;
+  // prompt Oath of Moment + doctrine selection for the active player
+  promptCommandChoices();
+  renderAll();
+}
+function promptCommandChoices(){
+  const ar=armyRuleOf(turn);
+  const det=detachOf(turn);
+  // Oath of Moment (or any army rule that needs an enemy target)
+  if(ar&&/oath/i.test(ar.name)){
+    const enemies=units.filter(u=>u.player!==turn&&!u.dead);
+    if(enemies.length){action={kind:'oath'};showActionPanel(true);renderAction();return;}
+  }
+  // doctrine selection
+  if(det&&det.doctrines&&det.doctrines.length){promptDoctrine();return;}
+}
+function promptDoctrine(){
+  const det=detachOf(turn);if(!det||!det.doctrines)return;
+  action={kind:'doctrine'};showActionPanel(true);renderAction();
+}
+function chooseDoctrine(id){
+  activeDoctrine[turn]=id;
+  if(!usedDoctrines[turn].includes(id))usedDoctrines[turn].push(id);
+  const det=detachOf(turn);const doc=det.doctrines.find(d=>d.id===id);
+  log("sys",`Doctrine active: ${doc?doc.name:id}.`);
+  action=null;showActionPanel(false);renderAll();render();renderStratPanel();updateHint();
+}
+function chooseOath(eid){
+  oathTarget[turn]=eid;const e=units.find(u=>u.id===eid);
+  log("sys",`Oath of Moment → ${e?e.name:'target'}.`);
+  // proceed to doctrine if any
+  const det=detachOf(turn);
+  if(det&&det.doctrines&&det.doctrines.length)promptDoctrine();
+  else{action=null;showActionPanel(false);}
+  renderAll();render();
+}
+
+/* ---- STRATAGEMS: CP economy + timing windows ---- */
+function currentWindow(){
+  // map current game state to a stratagem "when" window
+  if(deploying||placingTerrain)return null;
+  const ph=PHASES[phaseIdx];
+  if(ph==="Command")return 'command';
+  if(ph==="Movement")return 'movement';
+  if(ph==="Shooting")return 'shooting';
+  if(ph==="Charge")return 'charge';
+  if(ph==="Fight")return 'fight';
+  return null;
+}
+function stratagemsAvailable(p){
+  const det=detachOf(p);if(!det)return [];
+  const w=currentWindow();
+  // a player may use their own-phase stratagems on their turn; defensive ones are handled inline via prompts
+  const ownTurn=(p===turn);
+  return det.stratagems.filter(s=>{
+    if(s.cp>cp[p])return false;
+    if(ownTurn){
+      if(s.when===w)return true;
+      if(s.when==='shootOrFight'&&(w==='shooting'||w==='fight'))return true;
+      if(s.when==='chargeOrFight'&&(w==='charge'||w==='fight'))return true;
+      if(s.when==='shootOrCharge'&&(w==='shooting'||w==='charge'))return true;
+    }
+    return false;
+  });
+}
+function useStratagem(p,name){
+  const det=detachOf(p);const s=det.stratagems.find(x=>x.name===name);if(!s)return;
+  if(s.cp>cp[p]){updateHint("Not enough CP.");return;}
+  // stratagems that target one of your units → enter selection
+  if(s.targetSelf){pendingStrat={p,s};action={kind:'stratTarget',s};showActionPanel(true);renderAction();return;}
+  commitStratagem(p,s,null);
+}
+function commitStratagem(p,s,unit){
+  cp[p]-=s.cp;
+  log("sys",`✦ ${PNAME[p]} uses <b>${s.name}</b> (${s.cp}CP)${unit?' on '+unit.name:''}. ${s.desc}`);
+  // attach effect flags to the target unit for the relevant side
+  if(unit){
+    const offensive=['shooting','fight','shootOrFight','charge','chargeOrFight','shootOrCharge','movement','command'].includes(s.when);
+    if(s.when==='targeted'||s.when==='fightTargeted'||s.when==='oppShootResolved'||s.when==='oppChargeEnd'||s.when==='oppMove'){
+      unit._stratDef=unit._stratDef||[];unit._stratDef.push(s.name);
+    }else{
+      unit._stratAtk=unit._stratAtk||[];unit._stratAtk.push(s.name);
+    }
+    // immediate-effect stratagems
+    s.fx.forEach(fx=>{
+      if(fx.k==='objControl')unit._ocBonus=(unit._ocBonus||0)+fx.n;
+      if(fx.k==='objControlMult')unit._ocMult=(unit._ocMult||1)*fx.n;
+      if(fx.k==='stickyObjective')stickyObjectiveFor(unit);
+      if(fx.k==='extraMove')doExtraMove(unit,fx.dice);
+    });
+  }
+  pendingStrat=null;action=null;showActionPanel(false);
+  renderAll();render();renderStratPanel();updateHint();
+}
+function stickyObjectiveFor(u){
+  const o=objectives.find(o=>Math.hypot(o.hx-u.hx,o.hy-u.hy)<=1.5);
+  if(o){o.sticky=u.player;log("sys",`&nbsp;&nbsp;Objective held stickily by ${PNAME[u.player]}.`);}
+}
+function doExtraMove(u,dice){
+  let d=dice==='6'?6:dice==='D3+3'?(d6()%3+1+3):d6();   // D6 default
+  log("sys",`&nbsp;&nbsp;${u.name} makes a ${d}" move.`);
+  // simple move toward nearest objective or away from enemy; here just mark moved
+  u._extraMove=d;
 }
 
 /* ---- MOVEMENT: normal moves are click-to-move; advancing prompts a dice roll ---- */
@@ -933,8 +1276,14 @@ function operateHatchways(){
 /* ---- SCORING ---- */
 function scoreObjectives(){
   objectives.forEach(o=>{let oc={1:0,2:0};
-    units.filter(u=>!u.dead&&!u.bshock&&Math.hypot(u.hx-o.hx,u.hy-o.hy)<=1.5).forEach(u=>oc[u.player]+=u.oc*u.models);
-    if(oc[1]>oc[2])vp[1]+=1;else if(oc[2]>oc[1])vp[2]+=1;});
+    units.filter(u=>!u.dead&&!u.bshock&&Math.hypot(u.hx-o.hx,u.hy-o.hy)<=1.5).forEach(u=>{
+      let ocv=(u.oc+(u._ocBonus||0))*(u._ocMult||1)*u.models;oc[u.player]+=ocv;});
+    let holder=oc[1]>oc[2]?1:oc[2]>oc[1]?2:0;
+    if(holder===0&&o.sticky)holder=o.sticky;       // sticky: stays held if uncontested
+    if(holder){vp[holder]+=1;if(o.sticky&&o.sticky!==holder)o.sticky=holder;else if(!o.sticky&&holder)o.lastHeld=holder;}
+  });
+  // clear one-turn OC bonuses
+  units.forEach(u=>{u._ocBonus=0;u._ocMult=1;});
 }
 function scoreObjectivesLive(){/* no-op placeholder; scoring happens at round end */}
 
@@ -1050,6 +1399,21 @@ function render(){
 
 /* ---- ACTION PANEL ---- */
 function showActionPanel(on){const p=$('actionPanel');if(p)p.style.display=on?'block':'none';}
+function renderStratPanel(){
+  const host=$('stratBody');if(!host)return;
+  if(deploying||placingTerrain){host.innerHTML='<p class="apNote">Stratagems available once the battle begins.</p>';$('cpDisplay').textContent='';return;}
+  const det=detachOf(turn);
+  $('cpDisplay').textContent=`${PSHORT[turn]} · ${cp[turn]} CP`;
+  if(!det){host.innerHTML='<p class="apNote">No detachment selected for this army (choose one in the muster screen).</p>';return;}
+  const avail=stratagemsAvailable(turn);
+  let h=`<div class="apSub">${pDetach[turn]} — ${currentWindow()||'—'} phase</div>`;
+  if(!avail.length)h+='<p class="apNote">No stratagems usable right now (timing or CP).</p>';
+  else avail.forEach(s=>{h+=`<button class="stratBtn" data-s="${s.name}"><b>${s.name}</b> <span class="cp">${s.cp}CP</span><span class="ty">${s.type}</span><span class="ds">${s.desc}</span></button>`;});
+  // also list the detachment rule + active doctrine for reference
+  h+=`<div class="apSub" style="margin-top:10px">Active</div><p class="apNote">Rule: <b>${det.rule.name}</b>${activeDoctrine[turn]?` · Doctrine: <b>${(det.doctrines||[]).find(d=>d.id===activeDoctrine[turn])?.name||activeDoctrine[turn]}</b>`:''}${oathTarget[turn]?` · Oath set`:''}</p>`;
+  host.innerHTML=h;
+  host.querySelectorAll('.stratBtn').forEach(b=>b.onclick=()=>useStratagem(turn,b.dataset.s));
+}
 function renderAction(){
   const host=$('actionBody');if(!host||!action)return;
   const a=action;let h='';
@@ -1081,19 +1445,33 @@ function renderAction(){
     h+=`</div>`;
     if(a.target)h+=`<button class="btn primary apRoll" id="apRollBtn">🎲 Roll 2D6 Charge</button>`;
     h+=`<button class="btn apCancel" id="apCancelBtn">Cancel</button>`;
-  }else if(a.kind==='fight'){
-    h=`<div class="apTitle">FIGHT — ${a.u.name}</div><div class="apSub">Target (in Engagement Range)</div><div class="apTargets">`;
-    a.targets.forEach(t=>{h+=`<button class="apTgt${a.target===t.id?' sel':''}" data-t="${t.id}">${t.name} <span>T${t.t} Sv${t.sv}+</span></button>`;});
-    h+=`</div><button class="btn primary apRoll" id="apRollBtn">🎲 Roll Melee Attacks</button>
-        <button class="btn apCancel" id="apCancelBtn">Cancel</button>`;
+  }else if(a.kind==='oath'){
+    const enemies=units.filter(u=>u.player!==turn&&!u.dead);
+    h=`<div class="apTitle">OATH OF MOMENT — ${PSHORT[turn]}</div><div class="apSub">Name your Oath target (re-roll Hits, and Wounds if Codex-pure)</div><div class="apTargets">`;
+    enemies.forEach(t=>{h+=`<button class="apTgt" data-oath="${t.id}">${t.name} <span>T${t.t} Sv${t.sv}+ · ${t.models} models</span></button>`;});
+    h+=`</div>`;
+  }else if(a.kind==='doctrine'){
+    const det=detachOf(turn);
+    h=`<div class="apTitle">${det.rule.name.toUpperCase()} — ${PSHORT[turn]}</div><div class="apSub">Select a doctrine for this round</div><div class="apTargets">`;
+    det.doctrines.forEach(d=>{const used=usedDoctrines[turn].includes(d.id);
+      h+=`<button class="apTgt${used?' used':''}" data-doc="${d.id}">${d.name}${used?' (used)':''} <span>${d.desc}</span></button>`;});
+    h+=`</div><button class="btn apCancel" id="apCancelBtn">Skip</button>`;
+  }else if(a.kind==='stratTarget'){
+    const s=a.s;const eligible=units.filter(u=>u.player===turn&&!u.dead);
+    h=`<div class="apTitle">✦ ${s.name} (${s.cp}CP)</div><p class="apNote">${s.desc}</p><div class="apSub">Choose target unit</div><div class="apTargets">`;
+    eligible.forEach(t=>{h+=`<button class="apTgt" data-strat="${t.id}">${t.name}</button>`;});
+    h+=`</div><button class="btn apCancel" id="apCancelBtn">Cancel</button>`;
   }
   host.innerHTML=h;
   // wire
   host.querySelectorAll('.apWpn').forEach(b=>b.onclick=()=>shootPickWeapon(+b.dataset.w));
-  host.querySelectorAll('.apTgt').forEach(b=>b.onclick=()=>{const t=units.find(u=>u.id===b.dataset.t);
-    if(a.kind==='shoot')shootPickTarget(t);else if(a.kind==='charge')chargePickTarget(t);else fightPickTarget(t);});
-  const rb=$('apRollBtn');if(rb)rb.onclick=()=>{if(a.kind==='advance')rollAdvance();else if(a.kind==='shoot')rollShoot();else if(a.kind==='charge')rollCharge();else rollFight();};
-  const cb=$('apCancelBtn');if(cb)cb.onclick=()=>{action=null;showActionPanel(false);renderAll();render();updateHint();};
+  host.querySelectorAll('[data-oath]').forEach(b=>b.onclick=()=>chooseOath(b.dataset.oath));
+  host.querySelectorAll('[data-doc]').forEach(b=>b.onclick=()=>chooseDoctrine(b.dataset.doc));
+  host.querySelectorAll('[data-strat]').forEach(b=>b.onclick=()=>{const u=units.find(x=>x.id===b.dataset.strat);commitStratagem(turn,action.s,u);});
+  host.querySelectorAll('.apTgt').forEach(b=>{if(b.dataset.oath||b.dataset.doc||b.dataset.strat)return;b.onclick=()=>{const t=units.find(u=>u.id===b.dataset.t);
+    if(a.kind==='shoot')shootPickTarget(t);else if(a.kind==='charge')chargePickTarget(t);else if(a.kind==='fight')fightPickTarget(t);};});
+  const rb=$('apRollBtn');if(rb)rb.onclick=()=>{if(a.kind==='advance')rollAdvance();else if(a.kind==='shoot')rollShoot();else if(a.kind==='charge')rollCharge();else if(a.kind==='fight')rollFight();};
+  const cb=$('apCancelBtn');if(cb)cb.onclick=()=>{action=null;showActionPanel(false);renderAll();render();updateHint();renderStratPanel();};
 }
 function abShort(w){const o=[];const a=w.ab;
   if(a.rapidfire)o.push('RF'+a.rapidfire);if(a.sustained)o.push('SH'+a.sustained);if(a.lethal)o.push('LH');
@@ -1134,6 +1512,7 @@ function renderAll(){
   else if(deploying){[1,2].forEach(p=>deployList[p].forEach((u,i)=>{const c=unitCard(u);if(i===deployIdx[p]&&p===nextDeployUnit()?.p)c.classList.add('sel');host.appendChild(c);}));}
   else units.filter(u=>u.player===turn).forEach(u=>host.appendChild(unitCard(u)));
   renderDetail();
+  if(typeof renderStratPanel==='function'&&!deploying&&!placingTerrain)renderStratPanel();
 }
 function unitCard(u){
   const d=document.createElement('div');

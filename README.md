@@ -100,3 +100,22 @@ Toggle **show dice rolls** in the right panel to see every die. **Auto-resolve P
 - Weapon **ability tags** are parsed from Wahapedia (Rapid Fire, Sustained Hits, Lethal Hits, Devastating Wounds, Twin-linked, Torrent, Assault, Pistol, Hazardous, Anti-X) and affect the dice math. Unit **abilities** (Core/Faction/Datasheet) are imported and shown on the unit detail panel, but their rules effects are descriptive only — they aren't auto-applied.
 - Weapons import at their **base profile**; wargear-option swaps aren't modelled. Squad sizes are inferred from the datasheet's unit composition — adjust with ± in the muster screen if needed.
 - Stats, points, keywords and weapon tags come straight from Wahapedia; the rest is a faithful-but-simplified take on the core rules.
+
+---
+
+## Detachments, doctrines, stratagems & enhancements
+
+A faction-agnostic detachment engine lives in `detachments.js`. Each faction is one entry; the file currently includes the full **Space Marines / Adeptus Astartes** set (17 detachments — Gladius, Anvil Siege, Ironstorm, Firestorm, Stormlance, Vanguard Spearhead, 1st Company, Librarius Conclave, Bastion, Orbital Assault, Ceramite Sentinels, Armoured Speartip, Headhunter, plus Ultramarines' Blade of Ultramar & Reclamation Force).
+
+How it works in play:
+- **Muster**: pick a Detachment per army from the new dropdown. Chapter-specific detachments only show for that chapter.
+- **Command phase**: name your **Oath of Moment** target, and (for detachments with doctrines) select a **Combat Doctrine** / Psychic Discipline. Effects apply army-wide until your next Command phase.
+- **Stratagem panel** (battle, left column): shows your **CP** and the stratagems whose timing window is open right now. Click to spend CP; target-self stratagems prompt for a unit. Effects feed into the live dice resolution.
+- **Enhancements**: assigned to characters in code (`unit.enh`); their buffs apply to the bearer's unit.
+
+Effects that are mechanically wired into combat include: Oath re-rolls, doctrine eligibility (shoot/charge after Advance/Fall Back), +1 Hit/Wound, granted weapon abilities ([SUSTAINED HITS], [LETHAL HITS], [DEVASTATING WOUNDS], [LANCE], [IGNORES COVER], [ASSAULT], [PRECISION], [ANTI-X]), Armour-of-Contempt AP worsening, -1 to be hit/wounded, Feel No Pain, invulnerable saves, bonus attacks/strength/AP, objective-control bonuses and sticky objectives.
+
+### Adding more factions
+Paste a faction's detachment rules, enhancements and stratagems and they're encoded into `DETACHMENT_DATA` using the same schema (see the top of `detachments.js` for the effect-code vocabulary). Currently **only Space Marines** is filled in — every other army (Chaos factions, Orks, Tyranids, Necrons, Aeldari, Drukhari, T'au, Astra Militarum, Custodes, Sisters, Mechanicus, Knights, Agents, Votann, Genestealer Cults, and the divergent SM chapters' own detachments) still needs its data pasted in.
+
+> Detachment rules text is GW's copyrighted material. The data file stores only the **mechanical effects** in brief, original wording — not the published flavour text.

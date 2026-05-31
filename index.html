@@ -180,6 +180,18 @@ h2 .num{font-family:'Share Tech Mono';color:var(--goldd);font-size:.74rem}
 .scard .cp{font-family:'Share Tech Mono';font-size:.66rem;color:var(--gold2)}
 /* ACTION PANEL */
 .actionPanel{display:none;border:1px solid var(--gold);border-radius:5px;background:linear-gradient(165deg,var(--panel2),var(--panel));padding:12px;margin-bottom:14px;box-shadow:0 0 22px rgba(212,175,55,.12)}
+.detachRow{padding:8px 16px;display:flex;align-items:center;gap:8px;border-top:1px solid var(--line)}
+.detachRow label{font-family:'Share Tech Mono';font-size:.66rem;color:var(--dim);letter-spacing:1px;text-transform:uppercase}
+.detSel{flex:1;background:var(--void);color:var(--bone);border:1px solid var(--line2);border-radius:4px;padding:6px 8px;font-family:'Barlow Condensed';font-size:.92rem;letter-spacing:.5px;cursor:pointer}
+.stratPanel{border:1px solid var(--line2);border-radius:5px;background:rgba(13,16,20,.6);padding:10px;margin-bottom:14px}
+.stratHd{font-family:'Cinzel';font-size:.78rem;letter-spacing:2px;color:var(--gold2);font-weight:700;margin-bottom:8px;display:flex;align-items:center}
+.cpDisplay{margin-left:auto;font-family:'Share Tech Mono';font-size:.72rem;color:var(--gold2);background:var(--void);border:1px solid var(--goldd);border-radius:3px;padding:2px 8px;letter-spacing:0}
+.stratBtn{display:block;width:100%;text-align:left;background:var(--panel);border:1px solid var(--line2);border-radius:4px;padding:7px 10px;margin-bottom:6px;cursor:pointer;transition:.13s;position:relative}
+.stratBtn:hover{border-color:var(--gold);background:var(--panel2)}
+.stratBtn b{font-family:'Barlow Condensed';font-weight:600;font-size:.95rem;color:var(--bone);letter-spacing:.3px}
+.stratBtn .cp{position:absolute;top:7px;right:10px;font-family:'Share Tech Mono';font-size:.7rem;color:var(--gold2)}
+.stratBtn .ty{display:block;font-family:'Share Tech Mono';font-size:.58rem;color:var(--plasma2);letter-spacing:1px;text-transform:uppercase;margin-top:1px}
+.stratBtn .ds{display:block;font-size:.82rem;color:var(--ash);line-height:1.4;margin-top:3px}
 .apTitle{font-family:'Cinzel';font-weight:700;font-size:.95rem;letter-spacing:1.5px;color:var(--gold2);margin-bottom:8px}
 .apSub{font-family:'Share Tech Mono';font-size:.68rem;letter-spacing:1px;color:var(--ash);margin:10px 0 5px;text-transform:uppercase}
 .apNote{font-size:.88rem;color:var(--ash);margin:6px 0}
@@ -317,11 +329,13 @@ h2 .num{font-family:'Share Tech Mono';color:var(--goldd);font-size:.74rem}
     <div class="musterGrid">
       <div class="armyCol imp" id="col1">
         <div class="armyHd"><select class="facSel" id="facSel1"></select><span class="ptcount" id="pc1">0 / 500</span></div>
+        <div class="detachRow"><label>Detachment</label><select class="detSel" id="detSel1"></select></div>
         <div class="ptbar"><i id="pb1" style="width:0%"></i></div>
         <div class="shopList" id="shop1"></div>
       </div>
       <div class="armyCol cha" id="col2">
         <div class="armyHd"><select class="facSel" id="facSel2"></select><span class="ptcount" id="pc2">0 / 500</span></div>
+        <div class="detachRow"><label>Detachment</label><select class="detSel" id="detSel2"></select></div>
         <div class="ptbar"><i id="pb2" style="width:0%"></i></div>
         <div class="shopList" id="shop2"></div>
       </div>
@@ -343,6 +357,10 @@ h2 .num{font-family:'Share Tech Mono';color:var(--goldd);font-size:.74rem}
       <div class="btnrow"><button class="btn" id="autoBtn">⏩ Auto-resolve Phase</button></div>
       <div style="height:16px"></div>
       <div class="actionPanel" id="actionPanel"><div id="actionBody"></div></div>
+      <div class="stratPanel" id="stratPanel">
+        <div class="stratHd">✦ STRATAGEMS <span class="cpDisplay" id="cpDisplay"></span></div>
+        <div id="stratBody"></div>
+      </div>
       <h2><span class="num">[II]</span> <span id="rosterTitle">Forces</span></h2>
       <div id="rosterActive"></div>
     </div>
@@ -378,6 +396,7 @@ h2 .num{font-family:'Share Tech Mono';color:var(--goldd);font-size:.74rem}
   <div class="mcard"><h2 id="modalTitle">Battle Concluded</h2><div class="victor" id="victorName">—</div><p id="victorText"></p><button class="btn primary" id="modalReset">Muster Anew</button></div>
 </div>
 
+<script src="detachments.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

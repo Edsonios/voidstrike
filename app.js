@@ -214,6 +214,7 @@ function buildFromCSV(tables){
     const allKw=(kws[ds.id]||[]).map(k=>({kw:(k.keyword||k.name||'').toUpperCase(),fac:k.is_faction_keyword==='true'})).filter(k=>k.kw);
     const kwList=allKw.filter(k=>!k.fac).map(k=>k.kw);
     const factionKw=allKw.filter(k=>k.fac).map(k=>k.kw);
+    const allKwUpper=allKw.map(k=>k.kw);   // every keyword regardless of the faction flag
     const ranged=[],melee=[];
     (wargear[ds.id]||[]).forEach(wg=>{
       const isMelee=/melee/i.test(wg.range)||/melee/i.test(wg.type);
@@ -240,7 +241,7 @@ function buildFromCSV(tables){
     modelCount=clamp(modelCount,1,20);
 
     const key=slug(ds.faction_id+'_'+ds.name)||('ds'+ds.id);
-    newTpl[key]={name:ds.name,kw:kwList.length?kwList:["INFANTRY"],factionKw,pts:pts||0,role:ds.role||'',
+    newTpl[key]={name:ds.name,kw:kwList.length?kwList:["INFANTRY"],factionKw,allKw:allKwUpper,pts:pts||0,role:ds.role||'',
       m,t,sv,inv,w,ld,oc,models:modelCount,
       ranged,melee:melee.length?melee:[W("Close combat weapon","M",0,1,4,t,0,1)],
       abilities};
@@ -282,36 +283,57 @@ const SM_CHAPTERS=[
   {kw:'RAVEN GUARD',name:'Raven Guard'},{kw:'WHITE SCARS',name:'White Scars'},
 ];
 function isSpaceMarineFaction(name){return /space marines|adeptus astartes/i.test(name||'');}
+function kwsOf(k){const t=TEMPLATES[k];return (t&&(t.allKw||t.factionKw||t.kw))||[];}
 /* For a Space Marines faction, generate one selectable sub-faction per chapter:
-   chapter-specific datasheets + all generic Space Marine datasheets. */
+   chapter-specific datasheets + all generic Space Marine datasheets.
+   Detection scans EVERY keyword on each datasheet (chapter keywords are not always
+   flagged is_faction_keyword in the data). */
 function splitSpaceMarineChapters(newFactions,facName){
-  const smId=Object.keys(newFactions).find(fid=>isSpaceMarineFaction(newFactions[fid].name));
+  const chapterKWs=SM_CHAPTERS.map(c=>c.kw);
+  // Find the SM faction: by name, OR by its units carrying ADEPTUS ASTARTES / chapter keywords.
+  let smId=Object.keys(newFactions).find(fid=>isSpaceMarineFaction(newFactions[fid].name));
+  if(!smId){
+    smId=Object.keys(newFactions).find(fid=>newFactions[fid].units.some(k=>{
+      const kw=kwsOf(k);return kw.includes('ADEPTUS ASTARTES')||kw.some(x=>chapterKWs.includes(x));
+    }));
+  }
   if(!smId)return;
   const smUnits=newFactions[smId].units;
-  // which chapters are actually present in the data?
-  const present=SM_CHAPTERS.filter(ch=>smUnits.some(k=>(TEMPLATES[k].factionKw||[]).includes(ch.kw)));
-  if(!present.length)return;   // data doesn't tag chapters — leave the single faction as-is
-  const chapterKWs=SM_CHAPTERS.map(c=>c.kw);
-  // generic units = those with no specific chapter keyword (usable by any chapter)
-  const generic=smUnits.filter(k=>!(TEMPLATES[k].factionKw||[]).some(fk=>chapterKWs.includes(fk)));
+  // which chapters actually appear (in ANY keyword) on these units?
+  const present=SM_CHAPTERS.filter(ch=>smUnits.some(k=>kwsOf(k).includes(ch.kw)));
+  if(!present.length)return;   // data genuinely doesn't tag chapters — leave single faction
+  const sortFn=(a,b)=>{const ca=TEMPLATES[a].kw.includes('CHARACTER')?0:1,cb=TEMPLATES[b].kw.includes('CHARACTER')?0:1;if(ca!==cb)return ca-cb;return TEMPLATES[a].pts-TEMPLATES[b].pts;};
+  // generic units = carry no specific chapter keyword (usable by any chapter)
+  const generic=smUnits.filter(k=>!kwsOf(k).some(fk=>chapterKWs.includes(fk)));
   present.forEach(ch=>{
-    const own=smUnits.filter(k=>(TEMPLATES[k].factionKw||[]).includes(ch.kw));
-    // divergent chapters (their own army rules) traditionally don't share the generic Codex pool as freely,
-    // but for playability we include generic units for every chapter (matches how most games are built).
-    const unitSet=[...new Set([...own,...generic])];
-    unitSet.sort((a,b)=>{
-      const ca=TEMPLATES[a].kw.includes('CHARACTER')?0:1,cb=TEMPLATES[b].kw.includes('CHARACTER')?0:1;
-      if(ca!==cb)return ca-cb;return TEMPLATES[a].pts-TEMPLATES[b].pts;});
+    const own=smUnits.filter(k=>kwsOf(k).includes(ch.kw));
+    const unitSet=[...new Set([...own,...generic])].sort(sortFn);
     const fid='sm_'+ch.kw.toLowerCase().replace(/[^a-z]+/g,'_');
     newFactions[fid]={name:ch.name,units:unitSet,color:'imp',chapter:ch.kw,isSM:true};
   });
-  // keep a generic "Space Marines (any Chapter)" entry too, and drop the raw faction
-  newFactions[smId]={name:'Space Marines (any Chapter)',units:smUnits.slice().sort((a,b)=>{
-    const ca=TEMPLATES[a].kw.includes('CHARACTER')?0:1,cb=TEMPLATES[b].kw.includes('CHARACTER')?0:1;
-    if(ca!==cb)return ca-cb;return TEMPLATES[a].pts-TEMPLATES[b].pts;}),color:'imp',isSM:true};
+  newFactions[smId]={name:'Space Marines (any Chapter)',units:smUnits.slice().sort(sortFn),color:'imp',isSM:true};
 }
 
-/* ---------- REMOTE FETCH (Netlify function first, then public proxies) ---------- */
+/* Diagnostic: report what chapter data the importer actually sees. */
+function diagnoseSM(){
+  clearDpLog('dpLog');
+  const chapterKWs=SM_CHAPTERS.map(c=>c.kw);
+  // find SM faction in the LIVE FACTIONS registry
+  let smId=Object.keys(FACTIONS).find(fid=>isSpaceMarineFaction(FACTIONS[fid].name)&&!/built-in/i.test(FACTIONS[fid].name));
+  if(!smId)smId=Object.keys(FACTIONS).find(fid=>(FACTIONS[fid].units||[]).some(k=>kwsOf(k).includes('ADEPTUS ASTARTES')));
+  if(!smId){dpLog('dpLog','No Space Marines faction found in loaded data. Fetch first.','err');return;}
+  const f=FACTIONS[smId];
+  dpLog('dpLog',`SM faction: "${f.name}" — ${f.units.length} units`,'info');
+  const found={};
+  f.units.forEach(k=>kwsOf(k).forEach(w=>{if(chapterKWs.includes(w))found[w]=(found[w]||0)+1;}));
+  const chs=Object.keys(found);
+  if(chs.length)dpLog('dpLog',`Chapter keywords detected: ${chs.map(c=>c+'('+found[c]+')').join(', ')}`,'ok');
+  else dpLog('dpLog','NO chapter keywords detected on any unit. Sample keywords below:','err');
+  // sample 6 units' keywords so we can see the real format
+  f.units.slice(0,6).forEach(k=>{const t=TEMPLATES[k];dpLog('dpLog',`• ${t.name}: [${kwsOf(k).join(', ')}]`,'info');});
+  const splits=Object.values(FACTIONS).filter(x=>x.isSM&&x.chapter).length;
+  dpLog('dpLog',`Chapter sub-factions currently in dropdown: ${splits}`,splits?'ok':'err');
+}
 const PROXIES=[
   {id:'allorigins.win',wrap:u=>'https://api.allorigins.win/raw?url='+encodeURIComponent(u)},
   {id:'codetabs.com', wrap:u=>'https://api.codetabs.com/v1/proxy/?quest='+encodeURIComponent(u)},
@@ -1222,6 +1244,7 @@ window.addEventListener('DOMContentLoaded',async()=>{
   $('fetchBtn').onclick=()=>fetchAllFactions(false);
   $('refetchBtn').onclick=()=>fetchAllFactions(true);
   $('exportBtn').onclick=exportBundle;
+  $('diagBtn').onclick=diagnoseSM;
   $('clearBtn').onclick=()=>{clearStoredData();location.reload();};
   $('fileInput').onchange=e=>loadFromFiles(e.target.files);
   $('pasteBtn').onclick=stagePaste;$('pasteLoadBtn').onclick=loadFromPaste;

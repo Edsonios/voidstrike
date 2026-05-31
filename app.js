@@ -282,7 +282,17 @@ const SM_CHAPTERS=[
   {kw:'IRON HANDS',name:'Iron Hands'},{kw:'SALAMANDERS',name:'Salamanders'},
   {kw:'RAVEN GUARD',name:'Raven Guard'},{kw:'WHITE SCARS',name:'White Scars'},
 ];
-function isSpaceMarineFaction(name){return /space marines|adeptus astartes/i.test(name||'');}
+function isSpaceMarineFaction(name){
+  const n=(name||'').toLowerCase();
+  if(/chaos|heretic|traitor|daemon|death guard|thousand sons|world eaters|emperor's children/.test(n))return false;
+  return /space marines|adeptus astartes/.test(n);
+}
+// True only for loyalist Astartes units (rejects Chaos/Heretic Astartes).
+function isLoyalAstartesUnit(k){
+  const kw=kwsOf(k);
+  if(kw.includes('HERETIC ASTARTES')||kw.includes('CHAOS'))return false;
+  return kw.includes('ADEPTUS ASTARTES');
+}
 function kwsOf(k){const t=TEMPLATES[k];return (t&&(t.allKw||t.factionKw||t.kw))||[];}
 /* For a Space Marines faction, generate one selectable sub-faction per chapter:
    chapter-specific datasheets + all generic Space Marine datasheets.
@@ -290,12 +300,14 @@ function kwsOf(k){const t=TEMPLATES[k];return (t&&(t.allKw||t.factionKw||t.kw))|
    flagged is_faction_keyword in the data). */
 function splitSpaceMarineChapters(newFactions,facName){
   const chapterKWs=SM_CHAPTERS.map(c=>c.kw);
-  // Find the SM faction: by name, OR by its units carrying ADEPTUS ASTARTES / chapter keywords.
+  // Find the SM faction: by name, OR by its units being loyalist Astartes (not Chaos).
   let smId=Object.keys(newFactions).find(fid=>isSpaceMarineFaction(newFactions[fid].name));
   if(!smId){
-    smId=Object.keys(newFactions).find(fid=>newFactions[fid].units.some(k=>{
-      const kw=kwsOf(k);return kw.includes('ADEPTUS ASTARTES')||kw.some(x=>chapterKWs.includes(x));
-    }));
+    smId=Object.keys(newFactions).find(fid=>{
+      if(/chaos|heretic/i.test(newFactions[fid].name||''))return false;
+      const u=newFactions[fid].units;
+      return u.length>3 && u.some(isLoyalAstartesUnit) && u.some(k=>kwsOf(k).some(x=>chapterKWs.includes(x)));
+    });
   }
   if(!smId)return;
   const smUnits=newFactions[smId].units;
@@ -318,21 +330,27 @@ function splitSpaceMarineChapters(newFactions,facName){
 function diagnoseSM(){
   clearDpLog('dpLog');
   const chapterKWs=SM_CHAPTERS.map(c=>c.kw);
-  // find SM faction in the LIVE FACTIONS registry
-  let smId=Object.keys(FACTIONS).find(fid=>isSpaceMarineFaction(FACTIONS[fid].name)&&!/built-in/i.test(FACTIONS[fid].name));
-  if(!smId)smId=Object.keys(FACTIONS).find(fid=>(FACTIONS[fid].units||[]).some(k=>kwsOf(k).includes('ADEPTUS ASTARTES')));
-  if(!smId){dpLog('dpLog','No Space Marines faction found in loaded data. Fetch first.','err');return;}
+  // list every faction and whether it looks like loyalist SM
+  const all=Object.entries(FACTIONS).filter(([id])=>id!=='sm'&&id!=='csm');
+  dpLog('dpLog',`${all.length} imported factions total.`,'info');
+  // find loyalist SM: name match (excluding chaos) OR loyalist astartes units
+  let smId=all.find(([id,f])=>isSpaceMarineFaction(f.name))?.[0];
+  if(!smId)smId=all.find(([id,f])=>!/chaos|heretic/i.test(f.name)&&(f.units||[]).some(isLoyalAstartesUnit))?.[0];
+  if(!smId){
+    dpLog('dpLog','No LOYALIST Space Marines faction detected. Faction names found:','err');
+    all.slice(0,30).forEach(([id,f])=>dpLog('dpLog',`  · ${f.name} (${f.units.length})`,'info'));
+    return;
+  }
   const f=FACTIONS[smId];
-  dpLog('dpLog',`SM faction: "${f.name}" — ${f.units.length} units`,'info');
+  dpLog('dpLog',`Loyalist SM faction: "${f.name}" — ${f.units.length} units`,'ok');
   const found={};
   f.units.forEach(k=>kwsOf(k).forEach(w=>{if(chapterKWs.includes(w))found[w]=(found[w]||0)+1;}));
   const chs=Object.keys(found);
   if(chs.length)dpLog('dpLog',`Chapter keywords detected: ${chs.map(c=>c+'('+found[c]+')').join(', ')}`,'ok');
-  else dpLog('dpLog','NO chapter keywords detected on any unit. Sample keywords below:','err');
-  // sample 6 units' keywords so we can see the real format
-  f.units.slice(0,6).forEach(k=>{const t=TEMPLATES[k];dpLog('dpLog',`• ${t.name}: [${kwsOf(k).join(', ')}]`,'info');});
+  else{dpLog('dpLog','NO chapter keywords on these units. Sample below:','err');
+    f.units.slice(0,8).forEach(k=>dpLog('dpLog',`• ${TEMPLATES[k].name}: [${kwsOf(k).join(', ')}]`,'info'));}
   const splits=Object.values(FACTIONS).filter(x=>x.isSM&&x.chapter).length;
-  dpLog('dpLog',`Chapter sub-factions currently in dropdown: ${splits}`,splits?'ok':'err');
+  dpLog('dpLog',`Chapter sub-factions in dropdown: ${splits}`,splits?'ok':'err');
 }
 const PROXIES=[
   {id:'allorigins.win',wrap:u=>'https://api.allorigins.win/raw?url='+encodeURIComponent(u)},

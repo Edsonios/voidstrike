@@ -83,6 +83,7 @@ function refreshPlayerNames(){
 const PHASES=["Command","Movement","Shooting","Charge","Fight"];
 const HEX_INCH=1;          // simulation resolution: 1 cell = 1 inch (finer grid; was 2)
 const _RES=2/HEX_INCH;     // resolution factor vs the original 2"/cell board — cell-based constants scale by this
+const BUILD=3;   // data-pipeline build: v3 = base sizes (baseMm) + Deadly Demise capture. Shown in admin status so a stale deploy is visible before fetching.
 let CELL=28, GW=Math.round(24*_RES), GH=Math.round(22*_RES);
 let hoverHx=-1, hoverHy=-1;   // current mouse-hover cell (for move-preview + facing-toward-cursor render)
 let customW=24, customH=22;
@@ -766,7 +767,7 @@ function hasShadowModel(p){return units.some(u=>u.player===p&&!u.dead&&unitHasKw
 const LS_KEY='voidstrike_data_v1';
 function saveData(){
   try{
-    const payload={ts:Date.now(),TEMPLATES,FACTIONS:serializeFactions()};
+    const payload={ts:Date.now(),version:BUILD,TEMPLATES,FACTIONS:serializeFactions()};
     localStorage.setItem(LS_KEY,JSON.stringify(payload));
     return true;
   }catch(e){return false;}
@@ -804,12 +805,12 @@ function applyBundle(p){
   const ids=Object.keys(p.FACTIONS);
   if(ids.length>=1)pFaction[1]=ids[0];
   if(ids.length>=2)pFaction[2]=ids[1];
-  return {nFac:ids.length,nUnits:Object.keys(p.TEMPLATES).length,ts:p.ts};
+  return {nFac:ids.length,nUnits:Object.keys(p.TEMPLATES).length,ts:p.ts,version:(p.version!=null?p.version:0)};
 }
 
 /* Build the committed bundle object and trigger a download as factions-data.json. */
 function exportBundle(){
-  const payload={ts:Date.now(),version:1,TEMPLATES,FACTIONS:serializeFactions()};
+  const payload={ts:Date.now(),version:BUILD,TEMPLATES,FACTIONS:serializeFactions()};
   const facCount=Object.keys(payload.FACTIONS).length;
   if(!facCount){dpLog('dpLog','Nothing to export — fetch or load data first.','err');return;}
   const blob=new Blob([JSON.stringify(payload)],{type:'application/json'});
@@ -3851,11 +3852,17 @@ function tryAdminUnlock(){
 function setStatus(info,where){
   const st=$('dpStatus');if(!st||!info)return;
   const d=info.ts?new Date(info.ts):null;
-  st.textContent=`${info.nFac} factions · ${info.nUnits} units${where?' ('+where+')':''}`;st.classList.add('loaded');
+  const dv=(info.version!=null?info.version:'?');
+  const stale=(dv!==BUILD);
+  st.textContent=`${info.nFac} factions · ${info.nUnits} units${where?' ('+where+')':''} · app build v${BUILD}, data v${dv}${stale?' ⚠ re-fetch for current build':''}`;
+  st.classList.add('loaded');
 }
 
 window.addEventListener('DOMContentLoaded',async()=>{
   cv=$('board');ctx=cv.getContext('2d');logEl=$('log');
+  // Always-visible build stamp: lets you confirm which app.js the browser is actually running, before any
+  // fetch. If this doesn't read "build v3" after deploying, the browser is serving stale JS (hard-refresh).
+  const _bt=$('subTitle');if(_bt){_bt.textContent=_bt.textContent.replace(/\s*·\s*build v\d+.*/,'')+`  ·  build v${BUILD}`;}
   renderModeSel();renderSizeRow();renderFacSelectors();renderShops();
 
   // DATA LOAD ORDER: committed repo snapshot → localStorage → built-ins only

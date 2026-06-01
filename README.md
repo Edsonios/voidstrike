@@ -675,3 +675,19 @@ This delivers the core of the user's first two asks (models no longer snap, are 
 The base size is on Wahapedia in the `Datasheets_models` table's `base_size` field (and in the model name suffix `(⌀ x mm)`) — a table the importer ALREADY fetches. Added `parseBaseMm` in the importer to read it: handles round ("32mm"), the ⌀ symbol ("⌀32mm", "⌀ 40 mm"), ovals ("120 x 92mm" -> larger dimension), and the name-suffix form; returns 0 when absent. Wired through as `template.baseMm` -> `newUnit._baseMm`. `baseRadiusInch` now prefers the real base (diameter mm -> radius inches at 25.4mm/in) and only falls back to the keyword heuristic when the data lacks a size, so per-model render discs are now sized to the actual base when fetched. Verified: 32mm->0.630" radius, 170mm->3.346", oval picks the larger dim, missing falls back. 28 scenarios green (parsing is import-side, engine untouched).
 
 TO ACTIVATE: re-fetch via the admin Fetch button (the data now includes base_size), paste the new factions-data file, and the importer stamps real base sizes into every template; the renderer then draws each model at its true base diameter. Until re-fetched, the keyword default applies.
+
+
+### Base-size fetch: diagnosed stale deploy + added build-version visibility
+The re-uploaded factions-data had NO baseMm. Diagnosis (from field presence): the export carried transportCapacity/firingDeck/loadout but NOT deadlyDemise or baseMm — i.e. it was produced by app code from BEFORE the Deadly Demise and base-size deploys. The Wahapedia data and the parser are both fine; the browser fetched with stale JS (committed-but-not-cache-cleared / not hard-refreshed).
+
+To make this self-diagnosing, added `BUILD=3` (data-pipeline build: v3 = base sizes + Deadly Demise capture), stamped into every export's `version`, and surfaced in the admin status line: it now shows `app build vN, data vM` and a `⚠ re-fetch for current build` warning when they differ — so a stale deploy is visible BEFORE fetching.
+
+TO GET BASE SIZES: (1) commit the current app.js, (2) Netlify 'Clear cache and deploy site', (3) HARD-REFRESH the app (Cmd/Ctrl+Shift+R) so the browser drops stale JS, (4) confirm the admin status shows app build v3 with no stale warning, (5) Fetch, (6) re-upload factions-data.json. The export will then carry baseMm (and deadlyDemise), and per-model render discs size to real bases. 28 scenarios green.
+
+
+### Stale-deploy persists: added an always-visible build stamp
+The second re-upload was STILL version:1 with no baseMm/deadlyDemise — same stale build as before, timestamped after the v3 deploy. The deployed app.js in outputs is confirmed v3 (BUILD=3, parser + version:BUILD all present), so the issue is purely that the browser is running old JS — the v3 bundle isn't live in the running app. Most likely: app.js not committed to GitHub before fetching, OR Netlify didn't rebuild, OR the browser served cached JS (plain refresh re-ran the old bundle / service-worker cache).
+
+To stop round-tripping: the running build number is now stamped into the ALWAYS-VISIBLE header subtitle on page load (e.g. "WARHAMMER 40,000 · BOARDING ACTIONS · build v3"). Before fetching, just read the header — if it doesn't say "build v3", the browser has stale JS and the fetch will produce v1 data again.
+
+CHECKLIST to get base sizes: (1) confirm app.js is committed to GitHub (the file in outputs has BUILD=3); (2) Netlify 'Clear cache and deploy site' and wait for the deploy to finish; (3) open the app and HARD-REFRESH (Cmd/Ctrl+Shift+R); (4) READ THE HEADER — it must say 'build v3'; (5) only then Fetch and re-upload. 28 scenarios green.

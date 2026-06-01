@@ -887,10 +887,18 @@ function buildFromCSV(tables){
     modelCount=clamp(modelCount,1,20);
 
     const key=slug(ds.faction_id+'_'+ds.name)||('ds'+ds.id);
+    // Transport capacity: Wahapedia's Datasheets CSV carries a `transport` field describing the capacity.
+    // Parse the leading model count from it (e.g. "This model has a transport capacity of 12 ... models").
+    let capacity=0;
+    if(ds.transport){const cm=String(ds.transport).match(/(\d+)/);if(cm)capacity=toInt(cm[1],0);}
+    // Firing Deck x: an ability of the form "Firing Deck N" — pull N from the captured abilities.
+    let firingDeck=0;
+    abilities.forEach(a=>{const fm=String(a.name+' '+(a.desc||'')).match(/firing deck\s*'?(\d+)'?/i);if(fm)firingDeck=Math.max(firingDeck,toInt(fm[1],0));});
     newTpl[key]={name:ds.name,kw:kwList.length?kwList:["INFANTRY"],factionKw,allKw:allKwUpper,pts:pts||0,role:ds.role||'',
       m,t,sv,inv,w,ld,oc,models:modelCount,
       ranged,melee:melee.length?melee:[W("Close combat weapon","M",0,1,4,t,0,1)],
-      abilities};
+      abilities,
+      transportCapacity:capacity, firingDeck:firingDeck};
     (facUnits[ds.faction_id]=facUnits[ds.faction_id]||[]).push(key);
   });
 
@@ -1233,6 +1241,7 @@ function newUnit(tplKey,player){
     maxModels:t.models,models:t.models,woundsLeft:t.w,ranged:t.ranged,melee:t.melee,enh:null,
     hx:-1,hy:-1,modelPos:null,deployed:false,moved:false,advanced:false,fellback:false,charged:false,fought:false,
     inReserve:false,_reserveRound:0,_setupThisTurn:false,_arriveExtraMove:null,
+    _capacity:(t.transportCapacity||0),_firingDeck:(t.firingDeck||0),_embarkedIn:null,_embarked:[],_disembarkedThisTurn:false,
     shotWith:[],bshock:false,dead:false,_stratAtk:[],_stratDef:[],_ocBonus:0,_ocMult:1,_orderMove:0,_orderOc:0,_orderLd:0};
 }
 function totalWounds(u){return (u.models-1)*u.w+u.woundsLeft;}
@@ -1688,7 +1697,7 @@ function applyDamage(u,normalDamage,dPerHit,mortal,silent,fnp){
   const lost=before-totalWounds(u);
   if(u.modelPos)syncModelPos(u);
   if(silent)return;
-  if(u.dead){log("kill",`&nbsp;&nbsp;☠ ${u.name} DESTROYED!`);cultAmbushResurrect(u);painOnEnemyDeath(u);ypOnEnemyDeath(u);ecOnEnemyDeath(u,units.find(x=>x.id===selId&&x.player!==u.player&&!x.dead));miracleOnDeath(u);}
+  if(u.dead){if(u._embarked||isTransport(u)){const pax=units.filter(z=>!z.dead&&z._embarkedIn===u.id);if(pax.length)destroyedTransportDisembark(u);}log("kill",`&nbsp;&nbsp;☠ ${u.name} DESTROYED!`);cultAmbushResurrect(u);painOnEnemyDeath(u);ypOnEnemyDeath(u);ecOnEnemyDeath(u,units.find(x=>x.id===selId&&x.player!==u.player&&!x.dead));miracleOnDeath(u);}
   else if(lost>0)log("",`&nbsp;&nbsp;${u.name} −<span class="kill">${lost}</span>W${fnp?' (after FNP '+fnp+'+)':''} · ${u.models} model(s) left.`);
   else log("miss",`&nbsp;&nbsp;${u.name} unharmed.`);
 }
@@ -1703,7 +1712,7 @@ function applyMortals(u,n){
   if(!u||u.dead||n<=0)return;
   dmgChunk(u,n,true);
   if(u.modelPos)syncModelPos(u);
-  if(u.dead){log("kill",`&nbsp;&nbsp;☠ ${u.name} DESTROYED!`);cultAmbushResurrect(u);painOnEnemyDeath(u);ypOnEnemyDeath(u);ecOnEnemyDeath(u,units.find(x=>x.id===selId&&x.player!==u.player&&!x.dead));miracleOnDeath(u);}
+  if(u.dead){if(u._embarked||isTransport(u)){const pax=units.filter(z=>!z.dead&&z._embarkedIn===u.id);if(pax.length)destroyedTransportDisembark(u);}log("kill",`&nbsp;&nbsp;☠ ${u.name} DESTROYED!`);cultAmbushResurrect(u);painOnEnemyDeath(u);ypOnEnemyDeath(u);ecOnEnemyDeath(u,units.find(x=>x.id===selId&&x.player!==u.player&&!x.dead));miracleOnDeath(u);}
 }
 /* Reanimation Protocols: heal up to `wounds` across the unit.
    First tops up the current wounded model, then returns destroyed models at 1W,
@@ -1736,7 +1745,7 @@ function beginPhase(){
   // clear per-phase stratagem flags
   units.forEach(u=>{u._stratAtk=[];u._stratDef=[];});
   if(ph==="Command")doCommandPhase();
-  if(ph==="Movement"){units.forEach(u=>{if(u.player===turn){u.moved=false;u.advanced=false;u.fellback=false;u._bfMove=0;u._bfAssault=false;u._bfSudden=false;}});beginReinforcements(turn);}
+  if(ph==="Movement"){units.forEach(u=>{if(u.player===turn){u.moved=false;u.advanced=false;u.fellback=false;u._bfMove=0;u._bfAssault=false;u._bfSudden=false;u._disembarkedThisTurn=false;u._noChargeThisTurn=false;}});beginReinforcements(turn);}
   if(ph==="Shooting"){units.forEach(u=>{if(u.player===turn)u.shotWith=[];});spotted[turn]=[];spottedML[turn]=[];ritualTargets[turn]={};ritualsAttempted[turn]=[];}
   darkPact={1:false,2:false};   // Dark Pact lasts only the phase in which it is invoked
   empowered={1:[],2:[]};        // Empowered (Drukhari Pain abilities) lasts only the phase
@@ -2225,6 +2234,97 @@ function rollExtraMove(spec){
   if(spec==='6')return 6;
   if(spec==='D3+3')return d3()+3;
   return 0;
+}
+/* ---- TRANSPORTS -----------------------------------------------------------------------------------
+   A TRANSPORT model carries friendly models up to its capacity. Embarked units are off-board
+   (_embarkedIn = transport.id), excluded from combat/targeting/scoring, exactly like reserves but tied
+   to a carrier. Capacity comes from the template's transportCapacity (fetched from Wahapedia's Datasheets
+   `transport` field); if 0/unknown, capacity is treated as unlimited-but-flagged so the mechanism still
+   works pending real data. Firing Deck x lets the transport fire up to x embarked models' weapons.        */
+function isTransport(u){return !!u && ((u.allKw||u.kw||[]).includes('TRANSPORT') || (u._capacity>0));}
+function embarkedUnits(tr){return units.filter(u=>!u.dead&&u._embarkedIn===tr.id);}
+function embarkedModelCount(tr){return embarkedUnits(tr).reduce((n,u)=>n+Math.max(1,u.models),0);}
+function transportHasRoom(tr,unit){
+  if(!tr._capacity)return true;                       // unknown capacity -> allow (flagged), pending real data
+  return embarkedModelCount(tr)+Math.max(1,unit.models) <= tr._capacity;
+}
+// Embark: unit ended a move within 3" of a friendly transport, hasn't disembarked this phase, room exists.
+function embarkUnit(unit,tr){
+  if(!unit||!tr||unit.dead||tr.dead)return false;
+  if(unit._disembarkedThisTurn){updateHint("Cannot embark after disembarking this phase.");return false;}
+  if(!isTransport(tr)||tr.player!==unit.player){return false;}
+  if(rawDist(unitAnchor(unit),unitAnchor(tr))>3+0.0001 && dist(unit,tr)>3){updateHint("Must end within 3″ of the Transport.");return false;}
+  if(!transportHasRoom(tr,unit)){updateHint("Transport is at capacity.");return false;}
+  unit._embarkedIn=tr.id;unit.deployed=false;unit.hx=-1;unit.hy=-1;unit.modelPos=null;
+  log("sys",`${unit.name} embarks within ${tr.name}.`);
+  return true;
+}
+// Disembark: set up wholly within 3" of the transport, not within Engagement Range of enemies.
+// emergency=true widens to 6" (used for destroyed transports when 3" placement fails).
+function disembarkPlace(unit,tr,hx,hy,emergency){
+  const radius=emergency?6:3;
+  if(rawDist(unitAnchor(tr),{hx,hy})>radius)return false;
+  if(cellOccupied(hx,hy))return false;
+  // not within Engagement Range of any enemy
+  if(units.some(e=>!e.dead&&e.player!==unit.player&&e.deployed&&rawDist(unitAnchor(e),{hx,hy})<=ENGAGE_IN))return false;
+  unit._embarkedIn=null;unit.deployed=true;unit.hx=hx;unit.hy=hy;syncModelPos(unit);
+  unit._disembarkedThisTurn=true;
+  return true;
+}
+function disembarkUnit(unit,tr,hx,hy){
+  if(!unit||unit._embarkedIn!==tr.id)return false;
+  if(tr.advanced||tr.fellback){updateHint("Cannot disembark from a Transport that Advanced or Fell Back.");return false;}
+  if(!disembarkPlace(unit,tr,hx,hy,false)){updateHint("Disembark must be wholly within 3″ and clear of enemies.");return false;}
+  // timing: if the transport already made a Normal move, the unit counts as having moved and cannot charge
+  if(tr.moved){unit.moved=true;unit._noChargeThisTurn=true;}
+  log("sys",`${unit.name} disembarks from ${tr.name}.`);
+  return true;
+}
+/* Destroyed transport: embarked units immediately disembark; D6 per disembarking model (1 -> 1 mortal to
+   that unit), unit Battle-shocked, counts as moved, cannot charge. Emergency Disembarkation (within 6",
+   mortal on 1-3, unplaceable models destroyed) if 3" placement is impossible. */
+function destroyedTransportDisembark(tr){
+  const passengers=embarkedUnits(tr);
+  passengers.forEach(unit=>{
+    // try a 3" ring of cells around the transport, else a 6" ring (emergency)
+    const place=(emergency)=>{
+      const R=emergency?3:1;   // ring radius in cells (~6"/3")
+      for(let r=1;r<=R+2;r++)for(let dx=-r;dx<=r;dx++)for(let dy=-r;dy<=r;dy++){
+        const hx=tr.hx+dx,hy=tr.hy+dy;if(hx<0||hy<0||hx>=GW||hy>=GH)continue;
+        if(disembarkPlace(unit,tr,hx,hy,emergency))return true;
+      }
+      return false;
+    };
+    let emergency=false;
+    if(!place(false)){emergency=true;if(!place(true)){
+      // cannot place at all: the unit is destroyed
+      unit.dead=true;unit.models=0;unit.woundsLeft=0;unit._embarkedIn=null;
+      log("kill",`${unit.name} cannot disembark from the wreck — destroyed.`);return;
+    }}
+    // mortal wounds: D6 per model, 1 (or 1-3 emergency) -> 1 mortal to the unit
+    let mw=0;const n=Math.max(1,unit.models);
+    for(let i=0;i<n;i++){const r=d6();if(emergency?r<=3:r===1)mw++;}
+    if(mw>0)applyMortals(unit,mw);
+    if(!unit.dead){
+      unit.bshock=true;unit.moved=true;unit._noChargeThisTurn=true;
+      log("sys",`${unit.name} bails from the wreck${emergency?' (emergency)':''}${mw?` — ${mw} mortal`:''}; Battle-shocked.`);
+    }
+  });
+}
+/* Firing Deck x: when the transport shoots, up to x embarked models contribute a ranged weapon and their
+   units are locked out of shooting this phase. With per-model loadouts not in the data, we model the
+   effect: the transport gains up to x extra ranged attacks sourced from embarked units, and those units
+   are flagged as having shot. Returns the number of decks used (for logging). */
+function firingDeckShots(tr){
+  const x=tr._firingDeck||0;if(x<=0)return [];
+  const pax=embarkedUnits(tr).filter(u=>!u.shotWith||!u.shotWith.length);
+  const picked=pax.slice(0,x);
+  const extra=[];
+  picked.forEach(u=>{
+    const w=(u.ranged||[]).find(w=>!(w.ab&&w.ab.oneshot));
+    if(w){extra.push(w);u.shotWith=(u.shotWith||[]).concat(['__firingdeck__']);log("sys",`${u.name} fires via ${tr.name}'s Firing Deck.`);}
+  });
+  return extra;
 }
 /* Reinforcements step (start of a player's Movement phase). Arrival rules (unified across modes):
    - Strategic Reserves (any reserve unit): from battle round 1, the player may bring on ONE unit per

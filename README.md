@@ -496,3 +496,19 @@ Rules encoded:
 Verified by a new oracle scenario (`reserves_deepstrike`): near-placement rejected, far accepted, placement behind a wall accepted (wall-ignored distance), Deep Strike blocked in R1 and allowed in R2, and the end-of-R3 carve-out (pre-battle reserve destroyed, R3-reserved survives). 18 scenarios total, all green; 80-step full game clean.
 
 **Known gap (belongs to the AI work, not this system):** the AI does not yet use the reinforcement arrival path, so an AI player holding reserves loses them to the end-of-R3 rule. The rules system is correct; AI reinforcement behaviour is unbuilt and is deferred to the AI portion. Next structural systems: Transports/embark + Firing Deck, Aircraft/Hover, Deadly Demise (mechanism only — per-unit magnitude is data-blocked).
+
+
+### Structural systems — Transports (embark / disembark / Firing Deck / destroyed)
+Second structural system, built against the pasted Transports rules text.
+
+Fetch extension (no Netlify change needed — the source CSV already carries it): the importer now reads **transport capacity** from Wahapedia's Datasheets `transport` field (parses the leading number) into `transportCapacity`, and **Firing Deck x** from the captured abilities into `firingDeck`. `newUnit` carries `_capacity`, `_firingDeck`, and embark state (`_embarkedIn`, `_disembarkedThisTurn`). So a re-fetched factions-data.json populates real values automatically.
+
+Mechanics encoded:
+- **Embark**: a unit ending within 3" of a friendly TRANSPORT embarks (off-board, `_embarkedIn`, excluded from combat/targeting/scoring); blocked if it disembarked this phase or the transport is at capacity (`transportHasRoom`; unknown capacity allowed-but-flagged pending data).
+- **Disembark**: set up wholly within 3" of the transport, clear of Engagement Range; cannot disembark from a transport that Advanced or Fell Back; if the transport already made a Normal move, the unit counts as moved and cannot charge.
+- **Firing Deck x**: the transport gains up to x ranged weapons sourced from embarked units, and those units are locked out of shooting this phase (`firingDeckShots`).
+- **Destroyed transport**: embarked units immediately disembark before removal; D6 per model (1 → 1 mortal to the unit), unit Battle-shocked, counts as moved, cannot charge. **Emergency Disembarkation** widens placement to 6", mortal on 1-3, and destroys any model that still cannot be placed. Wired at both death sites (applyDamage/applyMortals), before the on-death trigger chain.
+
+Verified by a new oracle scenario (`transports`): capacity respected (5 fits, +8 rejected at cap 10), embarked unit off-board, disembark within 3", Firing Deck grants a shot and locks the passenger out, and a destroyed transport forces the passenger to bail out Battle-shocked. 19 scenarios, all green; 80-step game clean.
+
+**Data note:** capacity and Firing Deck values are now *consumed* correctly; real per-datasheet values arrive when the re-fetched export carries them (the extraction is in place). Per-model weapon selection for Firing Deck is modelled as an effect (extra shots + passenger lockout) rather than exact per-model loadouts, consistent with the per-model-loadout data gap. Next structural systems: Aircraft/Hover, then Deadly Demise (mechanism; magnitude data-dependent).

@@ -247,5 +247,17 @@
       "earlyDestroyed": true,
       "lateSurvived": true
     }
+  },
+  "transports": {
+    "ok": true,
+    "result": {
+      "capacityRespected": true,
+      "sqOffBoard": true,
+      "disembarked": true,
+      "deckGaveShot": true,
+      "paxLockedOut": true,
+      "bailedOut": true,
+      "bshockApplied": true
+    }
   }
 }

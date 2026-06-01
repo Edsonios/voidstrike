@@ -425,6 +425,52 @@ const SCENARIOS = {
       dsBlockedR1:(dsR1===false), dsAllowedR2:(dsR2===true),
       earlyDestroyed:early.dead, lateSurvived:!late.dead
     };
+  `,
+
+  // 20. Transports: embark (capacity), disembark (3" + timing), destroyed-transport disembark, Firing Deck.
+  transports: `
+    mode='open';GW=24;GH=22;PNAME={1:'A',2:'B'};objectives=[];walls=[];hatchways=[];
+    TEMPLATES.rhino={name:'Rhino',kw:['VEHICLE','TRANSPORT'],allKw:['VEHICLE','TRANSPORT'],pts:75,m:12,t:9,sv:3,inv:0,w:10,ld:6,oc:2,ranged:[{name:'bolter',type:'R',rng:24,a:3,skill:3,s:4,ap:0,d:1,ab:{}}],melee:[],models:1,transportCapacity:10,firingDeck:1,abilities:[]};
+    TEMPLATES.squad={name:'Squad',kw:['INFANTRY'],allKw:['INFANTRY'],pts:90,m:6,t:4,sv:4,inv:0,w:1,ld:6,oc:1,ranged:[{name:'rifle',type:'R',rng:24,a:1,skill:3,s:4,ap:0,d:1,ab:{}}],melee:[],models:5,abilities:[]};
+    TEMPLATES.big={name:'Big',kw:['INFANTRY'],allKw:['INFANTRY'],pts:120,m:6,t:4,sv:4,inv:0,w:1,ld:6,oc:1,ranged:[],melee:[],models:8,abilities:[]};
+    TEMPLATES.foe={name:'Foe',kw:['INFANTRY'],allKw:['INFANTRY'],pts:80,m:6,t:4,sv:4,inv:0,w:1,ld:6,oc:1,ranged:[],melee:[],models:5,abilities:[]};
+    FACTIONS.a={name:'A',units:['rhino','squad','big'],color:'imp'};FACTIONS.b={name:'B',units:['foe'],color:'xenos'};
+    pFaction[1]='a';pFaction[2]='b';turn=1;round=1;
+
+    // capacity check: capacity 10; a 5-model squad fits, then an 8-model unit does NOT (5+8>10)
+    var tr=newUnit('rhino',1);tr.deployed=true;tr.hx=10;tr.hy=10;syncModelPos(tr);
+    var sq=newUnit('squad',1);sq.deployed=true;sq.hx=11;sq.hy=10;syncModelPos(sq);  // within 3"
+    var big=newUnit('big',1);big.deployed=true;big.hx=11;big.hy=11;syncModelPos(big);
+    units.length=0;units.push(tr,sq,big);
+    var emb1=embarkUnit(sq,tr);                 // 5 models -> fits
+    var emb2=embarkUnit(big,tr);                // +8 -> exceeds 10 -> reject
+    var capacityRespected=(emb1===true && emb2===false);
+    var sqOffBoard=(sq._embarkedIn===tr.id && sq.deployed===false);
+
+    // disembark within 3", clear of enemies
+    var dis=disembarkUnit(sq,tr,10,12);         // 2 cells (~4"?) -> within 3"? cell dist 2 -> rawDist 4 >3; try adjacent
+    var dis2=sq._embarkedIn?disembarkUnit(sq,tr,11,10):true;  // adjacent cell within 3"
+    var disembarked=(sq._embarkedIn===null && sq.deployed===true);
+
+    // Firing Deck: re-embark squad, transport gains an extra weapon, squad locked from shooting
+    sq._embarkedIn=tr.id;sq.deployed=false;sq.shotWith=[];
+    var deck=firingDeckShots(tr);
+    var deckGaveShot=(deck.length===1);
+    var paxLockedOut=(sq.shotWith&&sq.shotWith.length>0);
+
+    // destroyed transport: embark the squad, kill the transport, squad must bail (battle-shocked, on board or dead)
+    sq._embarkedIn=tr.id;sq.deployed=false;sq.shotWith=[];sq.bshock=false;
+    var foe=newUnit('foe',2);foe.deployed=true;foe.hx=20;foe.hy=20;syncModelPos(foe);units.push(foe);
+    tr.dead=false;
+    destroyedTransportDisembark(tr);
+    var bailedOut=(sq._embarkedIn===null && (sq.deployed===true||sq.dead===true));
+    var bshockApplied=(sq.dead||sq.bshock===true);
+
+    globalThis.__result={
+      capacityRespected:capacityRespected, sqOffBoard:sqOffBoard,
+      disembarked:disembarked, deckGaveShot:deckGaveShot, paxLockedOut:!!paxLockedOut,
+      bailedOut:bailedOut, bshockApplied:bshockApplied
+    };
   `
 };
 

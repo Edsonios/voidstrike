@@ -169,6 +169,13 @@ h2 .num{font-family:'Share Tech Mono';color:var(--goldd);font-size:.74rem}
 .die{width:25px;height:25px;border:1px solid var(--line2);border-radius:5px;background:var(--panel2);display:flex;align-items:center;justify-content:center;font-family:'Share Tech Mono';font-size:.82rem;color:var(--txt);animation:pop .25s ease}
 .die.s6{border-color:var(--gold);color:var(--gold2);box-shadow:0 0 9px rgba(212,175,55,.45)}
 .die.s1{border-color:var(--blood);color:var(--blood2)}.die.ok{border-color:var(--acid);color:var(--acid)}.die.bad{opacity:.42}
+.dicePanel{border:1px solid var(--line2);border-radius:6px;background:var(--void2);padding:10px;min-height:54px;margin-bottom:8px}
+.diceEmpty{color:var(--ash);font-size:.8rem;font-style:italic;opacity:.7}
+.diceRow{display:flex;align-items:center;gap:8px;margin:4px 0;flex-wrap:wrap}
+.diceLabel{font-family:'Barlow Condensed';font-weight:600;letter-spacing:1px;text-transform:uppercase;font-size:.72rem;width:64px;flex-shrink:0;color:var(--ash)}
+.diceLabel.hit{color:var(--gold2)}.diceLabel.wound{color:#e08a3c}.diceLabel.save{color:#5aa6d8}.diceLabel.fnp{color:var(--acid)}
+.diceHead{font-family:'Barlow Condensed';font-weight:600;letter-spacing:.5px;font-size:.9rem;color:var(--bone);margin-bottom:6px;border-bottom:1px solid var(--line);padding-bottom:4px}
+.e.evt{cursor:pointer;border-left:2px solid transparent;padding-left:6px}.e.evt:hover{border-left-color:var(--gold);background:rgba(212,175,55,.06)}.e.evt.sel{border-left-color:var(--gold);background:rgba(212,175,55,.1)}
 @keyframes pop{from{transform:scale(.3) rotate(-12deg);opacity:0}to{transform:scale(1) rotate(0);opacity:1}}
 .scoreboard{display:flex;gap:9px;margin-bottom:14px}
 .scard{flex:1;border:1px solid var(--line);border-radius:4px;padding:9px;text-align:center;background:var(--panel)}
@@ -383,10 +390,12 @@ h2 .num{font-family:'Share Tech Mono';color:var(--goldd);font-size:.74rem}
         <div class="scard p1"><div class="nm" id="sb1">Player 1</div><div class="vp" id="vp1">0<small> VP</small></div><div class="cp">CP <span id="cp1">0</span> · <span id="pts1">0</span>pts</div></div>
         <div class="scard p2"><div class="nm" id="sb2">Player 2</div><div class="vp" id="vp2">0<small> VP</small></div><div class="cp">CP <span id="cp2">0</span> · <span id="pts2">0</span>pts</div></div>
       </div>
-      <h2><span class="num">[III]</span> Battle Log</h2>
+      <h2><span class="num">[III]</span> Dice</h2>
+      <div class="dicePanel" id="dicePanel"><div class="diceEmpty">Resolved throws appear here. Click a log event to review its dice.</div></div>
+      <h2><span class="num">[IV]</span> Battle Log</h2>
       <div class="log" id="log"></div>
-      <label class="toggle"><input type="checkbox" id="dieToggle" checked> show dice rolls</label>
-      <h2><span class="num">[IV]</span> Selected Unit</h2>
+      <label class="toggle"><input type="checkbox" id="dieToggle" checked> show dice in log too</label>
+      <h2><span class="num">[V]</span> Selected Unit</h2>
       <div id="detail" class="detail">No unit selected.</div>
     </div>
   </div>

@@ -751,3 +751,13 @@ Moves now glide. A purely-visual animation layer captures each model's OLD posit
 Verified the interpolation directly (t=0 shows the old position, mid shows an eased midpoint, end shows the final position; real modelPos is untouched throughout). NOTE: an initial test showed a flat position — that was a test-harness clock-mocking artifact (the mocked performance.now wasn't visible to the eval'd module scope), not a code issue; using a module-readable clock confirmed correct interpolation.
 
 NEXT (final batch item): dice panel + event-log rework — separate dice area, resolve-throw button, per-attack hit/wound/save/FNP dice visible, log shows event history with click-to-see-dice.
+
+
+### Dice panel + event-log rework (final batch item)
+Combat is now legible. `resolveAttacks` already built per-step dice arrays (hitDice/woundDice/saveDice) and now also captures FNP dice (via a `_fnpCollect` collector the FNP roller in applyDamage appends to). At the end of each attack it calls `pushDiceEvent({title, hitDice, woundDice, saveDice, fnpDice, result})`:
+- A dedicated **dice panel** (new HTML section above the log) renders the newest event as labeled rows — Hit / Wound / Save / FNP — each die coloured (crit gold, fail red, success green) so the full hit->wound->save->FNP sequence is visible at a glance, with per-row notes (e.g. "9 hit (3+)", "2 failed") and a result line.
+- The **battle log** now shows each attack as a clickable one-line EVENT summary ("▸ Gunners → Target · rifle — 2 models slain") instead of a wall of raw throws; clicking an event replays its exact dice in the panel (highlighting the selected event). The old inline per-throw dice are now opt-in via the "show dice in log too" toggle.
+
+Resolution logic is untouched — the dice were always rolled; this only captures and presents them — so the 29 oracle scenarios stay green. Verified: an attack records one structured event with correct per-step dice counts (15 hit / 9 wound / 6 save for 3A×5 models) and result summary; FNP rolls are captured (6 dice in a FNP test); a 150-step game logged 28 events with no errors.
+
+THIS COMPLETES THE UI/RENDERING REBUILD BATCH: free placement + per-model rendering, real-base-size handling (override table), per-phase setup->confirm interaction (Movement/Shooting/Charge/Fight), smooth movement animation, and the dice panel + event-log rework. (Muster-screen composition/wargear fix remains the one outstanding sub-item from the original list.) Next major phase: AI + Mass-Sim.

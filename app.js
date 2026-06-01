@@ -1882,15 +1882,42 @@ function inEntryZone(p,hx,hy){return entryZones[p].some(z=>hx>=z.x0&&hx<=z.x1&&h
 /* ===================================================================
    LOG + DICE
    =================================================================== */
-function clearLog(){logEl.innerHTML='';}
+function clearLog(){logEl.innerHTML='';_diceEvents=[];_renderDicePanel(null);}
 function log(cls,txt){const d=document.createElement('div');d.className='e '+(cls||'');d.innerHTML=txt;logEl.appendChild(d);logEl.scrollTop=logEl.scrollHeight;}
 function logDice(arr){
-  if(!$('dieToggle').checked||!arr.length)return;
+  if(!$('dieToggle')||!$('dieToggle').checked||!arr.length)return;
   const box=document.createElement('div');box.className='dicebox';
   arr.forEach(r=>{const s=document.createElement('span');
     s.className='die'+(r.v===6&&r.crit?' s6':'')+(r.v===1&&r.fail?' s1':'')+(r.ok?' ok':'')+(r.bad?' bad':'');
     s.textContent=r.v;box.appendChild(s);});
   logEl.appendChild(box);logEl.scrollTop=logEl.scrollHeight;
+}
+/* ---- DICE EVENTS: structured per-attack records the dice panel renders and the log links to. Each event
+   captures the hit/wound/save/FNP dice for one resolveAttacks call plus a short summary; the log shows the
+   summary as a clickable line, and clicking it replays that event's dice in the dice panel. ------------- */
+let _diceEvents=[];
+function _dieSpan(r){return `<span class="die${r.v===6&&r.crit?' s6':''}${r.v===1&&r.fail?' s1':''}${r.ok?' ok':''}${r.bad?' bad':''}">${r.v}</span>`;}
+function _renderDicePanel(ev){
+  const host=$('dicePanel');if(!host)return;
+  if(!ev){host.innerHTML='<div class="diceEmpty">Resolved throws appear here. Click a log event to review its dice.</div>';return;}
+  let h=`<div class="diceHead">${ev.title}</div>`;
+  const row=(label,cls,dice,note)=>{if(!dice||!dice.length)return '';
+    return `<div class="diceRow"><span class="diceLabel ${cls}">${label}</span>${dice.map(_dieSpan).join('')}${note?`<span class="diceLabel" style="width:auto;opacity:.8">${note}</span>`:''}</div>`;};
+  h+=row('Hit','hit',ev.hitDice,ev.hitNote);
+  h+=row('Wound','wound',ev.woundDice,ev.woundNote);
+  h+=row('Save','save',ev.saveDice,ev.saveNote);
+  h+=row('FNP','fnp',ev.fnpDice,ev.fnpNote);
+  if(ev.result)h+=`<div class="diceRow" style="margin-top:6px"><span class="diceLabel" style="width:auto;color:var(--bone)">${ev.result}</span></div>`;
+  host.innerHTML=h;
+}
+// Record an event and add a clickable summary line to the log.
+function pushDiceEvent(ev){
+  _diceEvents.push(ev);ev._idx=_diceEvents.length-1;
+  _renderDicePanel(ev);                                  // show the newest in the panel
+  const d=document.createElement('div');d.className='e evt';d.dataset.ev=ev._idx;
+  d.innerHTML=`▸ ${ev.title} — <b>${ev.result||''}</b>`;
+  d.onclick=()=>{logEl.querySelectorAll('.e.evt.sel').forEach(x=>x.classList.remove('sel'));d.classList.add('sel');_renderDicePanel(_diceEvents[ev._idx]);};
+  logEl.appendChild(d);logEl.scrollTop=logEl.scrollHeight;
 }
 function woundTarget(s,t){if(s>=t*2)return 2;if(s>t)return 3;if(s===t)return 4;if(s*2<=t)return 6;return 5;}
 function hasCover(att,def){
@@ -1992,18 +2019,35 @@ function resolveAttacks(att,def,weapon,nModels,silent){
   if(!silent&&mortal)log("",`&nbsp;&nbsp;Mortal wounds: <span class="kill">${mortal}</span>`);
   // Feel No Pain (defender)
   const fnp=mods&&mods.defFnp?mods.defFnp:0;
+  const defBefore=totalWounds(def), modelsBefore=def.models;
+  _fnpCollect=[];                                  // collector the FNP roller appends to (see applyDamage)
   applyDamage(def,totalDamage,perHit,mortal,silent,fnp);
+  const killed=modelsBefore-def.models;
+  if(!silent){
+    // build the structured dice event for the panel + clickable log line
+    const result=def.dead?`${def.name} DESTROYED`:(killed>0?`${killed} model${killed>1?'s':''} slain`:(failed+mortal>0?`${failed+mortal} wound${(failed+mortal)>1?'s':''}, none slain`:'no damage'));
+    pushDiceEvent({
+      title:`${att.name} → ${def.name} · ${weapon.name}`,
+      hitDice:ab.torrent?[]:hitDice, hitNote:ab.torrent?'TORRENT auto-hit':`${hits} hit (${skill}+)`,
+      woundDice, woundNote:`${wounds} wound (${wt}+)`,
+      saveDice, saveNote:`${failed} failed`,
+      fnpDice:_fnpCollect.slice(), fnpNote:fnp?`FNP ${fnp}+`:'',
+      result
+    });
+  }
+  _fnpCollect=null;
   if(ab.hazardous){const haz=[];let fails=0;
     for(let i=0;i<nModels;i++){const r=d6();haz.push({v:r,fail:true,bad:r===1,ok:r!==1});if(r===1)fails++;}
     if(!silent){log("",`&nbsp;&nbsp;<span style="color:var(--blood2)">HAZARDOUS</span>: ${fails} failed`);logDice(haz);}
     if(fails){const mw=fails*3;if(!silent)log("kill",`&nbsp;&nbsp;${att.name} takes <span class="kill">${mw}</span> mortal (Hazardous)!`);applyDamage(att,0,0,mw,silent);}}
   return {attacks,hits,wounds,failed,devastating};
 }
+let _fnpCollect=null;   // when non-null, FNP rolls are pushed here for the dice panel
 function applyDamage(u,normalDamage,dPerHit,mortal,silent,fnp){
   const before=totalWounds(u);
   // Feel No Pain: roll for each wound that would be lost
   function fnpFilter(dmg){
-    if(!fnp)return dmg;let kept=0;for(let i=0;i<dmg;i++){if(d6()<fnp)kept++;}return kept;
+    if(!fnp)return dmg;let kept=0;for(let i=0;i<dmg;i++){const r=d6();if(_fnpCollect)_fnpCollect.push({v:r,fail:true,ok:r>=fnp,bad:r<fnp});if(r<fnp)kept++;}return kept;
   }
   if(dPerHit>0&&normalDamage>0){const hits=Math.round(normalDamage/dPerHit);
     for(let h=0;h<hits;h++){const dealt=fnpFilter(dPerHit);for(let x=0;x<dealt;x++)dmgChunk(u,1,true);}}

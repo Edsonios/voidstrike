@@ -582,3 +582,61 @@ Closed the final gap from the Assault Sergeant example. The remaining unparsed l
 2. **Multi-item bundles** — "X (and Y) can be replaced with: 1 A and 1 B". A correctness fix, not just coverage: the earlier splitter MANGLED these (breaking "1 plasma pistol and 1 chainsword" into separate wrong items — a false positive producing illegal loadouts). Now "and"-joined bundles are protected during splitting and kept as one option; `splitAnd` separates the multi-weapon replace side. Also handles the active-voice "can replace their A with:" and colon-join ("with:1 X") forms.
 
 The `choices` field is new on parsed options (alongside ratio/who/replace/with/take/condition). Oracle scenario `loadout_parser` now asserts the choice-of-actions structure; 22 scenarios green. Every wargear option in the export is now structured data for the muster-screen consumer — multi-item bundles and per-model conditional swaps included.
+
+
+### Aircraft facing subsystem — Pass A (dormant facing layer)
+Building the facing subsystem the user asked for, using the same staged/de-risked method as the per-model rebuild: introduce the representation first as a dormant layer, prove it behaviour-neutral, then activate it for aircraft only in later passes.
+
+Pass A adds a `facing` field to every unit (degrees, 0°=east, clockwise on the y-down grid; null = no facing tracked, which is every existing unit). Pure heading helpers added: `headingDeg` (angle between two points), `normDeg`/`pivotDiff` (smallest signed/abs angle, wrap-correct), `withinArc` (is a target within ±arc of facing), and `setFacingFromMove` (records heading as direction of travel). `setFacingFromMove` is now called at every move commit (Normal, Fall Back, Advance, charge moveAdjacent, stepToward) — so facing is recorded on every move — but NOTHING reads facing yet, so behaviour is byte-identical (22→23 scenarios all green; the rewrite touches no outcome).
+
+Verified beyond the oracle: a direct test confirmed correct headings (E/S/W), pivot wrap (170°→-170° = 20°), the forward-arc test (ahead/behind/inclusive-at-90°), travel-direction recording, and heading-preservation on a zero-displacement move. Pinned by scenario `facing_math`.
+
+Remaining passes: B = aircraft movement consequences + facing-constrained ≥20" straight move and 90° pivot (activates facing for AIRCRAFT only); C = aircraft charge/fight/targeting (FLY-only) + Hover mode; D = renderer heading indicator.
+
+
+### Aircraft facing subsystem — Pass B (facing-constrained aircraft movement)
+Activates the Pass-A facing layer for AIRCRAFT only (capability work — outcomes change for aircraft, pinned by new scenarios). Helpers `isAircraft` (AIRCRAFT keyword AND not in Hover) and `unitCanFly` added.
+
+`tryMove` now branches for aircraft: only a Normal move; the destination must be at least 20" away (AIRCRAFT_MIN_MOVE) AND within the forward ±90° arc of current heading (modelling "move straight forward, then pivot up to 90°" — a point behind would need a turn >90° before moving). No Advance/Fall Back/Remain Stationary. The AI movement path mirrors this: an AI aircraft makes the best legal >=20" forward pass toward the nearest enemy, or is placed into Strategic Reserves (returns next turn) if no legal pass exists (edge of board). `reserveAircraft` puts every non-Hover AIRCRAFT into Strategic Reserves at battle start, per the deploy rule; they arrive via the existing reinforcement path.
+
+ABSTRACTION NOTE: true straight-line-then-pivot geometry is modelled via the heading layer (destination within ±90° arc + 20" minimum + heading updated to travel direction). On this grid, with no firing arcs or rear armour, this captures every gameplay consequence of the rule; exact base-orientation between pivots is not simulated.
+
+Verified by scenario `aircraft_move`: sub-20" rejected, >=20" forward accepted, rearward (>90° pivot) rejected, non-aircraft unaffected, and battle-start reserve placement. 24 scenarios green; 80-step game with an aircraft ran clean (jet correctly started in Reserves). KNOWN: AI doesn't yet bring reserves back on (the documented AI-reinforcement gap), so an AI aircraft currently stays reserved — rules are correct, AI behaviour is deferred to the AI work.
+
+Remaining: Pass C = aircraft charge/fight/targeting (FLY-only, can't charge/pile-in) + Hover mode toggle; Pass D = renderer heading indicator.
+
+
+### Aircraft facing subsystem — Pass C (combat rules + Hover)
+The combat-side aircraft rules (clean keyword-gated checks) plus Hover mode.
+
+- **Aircraft cannot charge** — `beginChargeSelection` refuses for `isAircraft` units.
+- **Only FLY may charge an aircraft** — charge target filter excludes AIRCRAFT enemies unless the charger can FLY.
+- **Aircraft melee only FLY, and only FLY may melee aircraft** — `meleeTargetSplit` foe-filter drops any (attacker,enemy) pairing where one side is an aircraft and the other can't FLY. This also yields the eligibility rule for free: an aircraft with no FLY enemy in range gets an empty target split (makes no attacks), and a non-FLY unit engaged only with an aircraft likewise has no legal target.
+- Pile-in/Consolidation already ignore AIRCRAFT for non-FLY models (`closestEnemyTo`).
+- **Hover mode** (`setHover`): for AIRCRAFT with a Hover ability, sets `_hover` (so `isAircraft` returns false — every aircraft special-case is bypassed) and Move:=20"; reversible (restores original Move). `unitHasHover` detects the ability.
+
+Verified by scenario `aircraft_combat`: aircraft can't charge; non-FLY can't target an aircraft with a charge; an aircraft engaged with both ground and flyer hits only the flyer; a non-FLY unit engaged only with an aircraft has no legal melee target; Hover strips aircraft status and sets M=20, reversibly. 25 scenarios green; 80-step game with aircraft + flyers ran clean.
+
+Remaining: Pass D = renderer heading indicator (draw facing + the 90°/20" reach), so the constraints are visible and verifiable on screen. The Hover toggle and aircraft reserve-arrival will get UI affordances alongside the renderer work.
+
+
+### Aircraft facing subsystem — Pass D (renderer) + movement-cost-around-walls
+Three rendering/interaction features plus a pathfinding upgrade:
+
+- **Facing indicator**: every unit that tracks a heading now draws a prow line + arrowhead in its facing direction (gold for AIRCRAFT, grey otherwise), so the facing the engine tracks is visible.
+- **Translucent move-preview on cursor hover**: when a movable unit is selected, hovering a cell shows a ghost token at that cell, a travel line (green = legal, red = illegal), a distance label, and a **heading-toward-cursor arrow** showing the direction the unit would face after moving. Driven by a mousemove listener tracking the hover cell (`hoverHx/hoverHy`); pure render, no engine state.
+- **Movement cost through/around walls**: ground moves now route AROUND walls and pay the longer path distance instead of being hard-blocked. New `pathInches`/`pathCostCells` helpers run a Dijkstra over the cell grid (8-connected, diagonal = √2) where a step is allowed only if the segment between cell centres isn't wall-blocked; a corner-cut guard prevents diagonals from squeezing through wall corners. `tryMove` uses this path distance as the move cost for non-aircraft (aircraft fly straight over terrain). Unreachable destinations are blocked with a clear hint. When there are no walls, behaviour is unchanged (straight-line distance), so the 25 oracle scenarios stay green.
+
+Verified: a wall forces a longer detour (e.g. 8″ straight → 16.5″ around a 6-cell wall), a sealed cell is correctly unreachable (Infinity), open moves are unchanged, and `render()` runs clean headless with facing + preview in all states. 25 scenarios green.
+
+STILL PENDING (needs user confirmation): finer GRID RESOLUTION. HEX_INCH=2 (1 cell = 2") is the SIMULATION resolution; CELL px is display only and already adaptive. Making the sim grid finer (e.g. HEX_INCH=1) doubles GW/GH and rescales every distance — a real change requiring full oracle re-record. Deferred pending confirmation of whether the user wants a finer simulation grid (smoother snapping) or just smaller on-screen cells.
+
+
+### Finer simulation grid (HEX_INCH 2 -> 1)
+The user confirmed they meant the SIMULATION grid was coarse (2" per cell), not the on-screen cell size. Doubled the resolution: `HEX_INCH` is now 1 (1 cell = 1 inch), so movement and positioning snap at 1" granularity instead of 2".
+
+Done as a faithful refactor, not a rewrite: most distance code already converts via `*HEX_INCH` / `/HEX_INCH` and scales automatically. The only resolution-DEPENDENT constants (hardcoded cell counts assuming 2"/cell) were made to derive from the resolution via a factor `_RES=2/HEX_INCH`, so they keep the same PHYSICAL size at any resolution: board dimensions `GW/GH` (now 48x44, was 24x22) and the sandbox clamps, `COH_CELLS` (coherency stays 2 physical inches), and `_CLUSTER_OFFSETS` (per-model cluster keeps its physical footprint). `ENGAGE_IN` was already in inches (resolution-independent). Because every physical distance is preserved, the engine plays an identical game on a finer grid.
+
+Validation discipline: re-recorded the oracle scenario-by-scenario. Exactly two scenarios changed — `aircraft_move` and `reserves_deepstrike` — both because their SETUPS hardcoded cell coordinates that meant different inch-distances on the new grid (e.g. an 11-cell move was 22" at 2"/cell, now 11"). These were test artifacts, not regressions; coordinates were updated to the new scale and re-verified to pass for the right reason. (Caught and corrected a near-miss where stale assertions would have recorded a wrong-reason green.) Functional proof: an M=6 unit now moves up to 6 cells (=6"), 7 cells (7") is not a plain Normal move; a full game on the 48x44 board ran clean in ~86ms (4x the cells, no performance issue). New invariant scenario `grid_resolution` pins HEX_INCH, board size, move granularity, and coherency. 26 scenarios green.
+
+This completes the four Pass-D items (facing indicator, translucent move-preview with cursor-heading, movement-cost-around-walls, finer grid) and the full Aircraft/Hover facing subsystem (Passes A-D).

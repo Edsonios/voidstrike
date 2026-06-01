@@ -396,7 +396,7 @@ const SCENARIOS = {
     // (a) placement within 9" of the enemy is rejected; beyond 9" accepted
     var near=deepStrikePlace(u,11,10);          // ~2" away -> reject (still in reserve)
     var stillReserve=u.inReserve;
-    var far=deepStrikePlace(u,10,17);           // far -> accept
+    var far=deepStrikePlace(u,10,20);           // 10" away (>9") -> accept
     var placedFar=!u.inReserve;
 
     // (b) wall-aware: put the unit back in reserve, drop a wall between a near enemy and the drop point
@@ -528,6 +528,113 @@ const SCENARIOS = {
       footnoteSkipped: !res.unparsed.some(u=>/^\\*/.test(u)),
       choiceOfActionsOK: !!(coa&&coa.choices&&coa.choices.length===2&&coa.choices[0].replace.length===2&&coa.choices[1].take[0]==='Astartes shield')
     };
+  `,
+
+  // 24. Facing/heading math (Pass A — dormant facing layer). Pure helpers must compute correct angles;
+  //     setFacingFromMove records direction of travel; withinArc gates a forward ±arc. Read by nothing yet.
+  facing_math: `
+    mode='open';GW=24;GH=22;PNAME={1:'A',2:'B'};objectives=[];walls=[];hatchways=[];
+    TEMPLATES.q={name:'Q',kw:['INFANTRY'],allKw:['INFANTRY'],pts:10,m:6,t:4,sv:4,inv:0,w:1,ld:6,oc:1,ranged:[],melee:[],models:1,abilities:[]};
+    FACTIONS.a={name:'A',units:['q'],color:'imp'};pFaction[1]='a';
+    var u=newUnit('q',1);u.deployed=true;u.hx=10;u.hy=10;syncModelPos(u);u.facing=0;
+    var east=Math.round(headingDeg(0,0,5,0)), south=Math.round(headingDeg(0,0,0,5)), west=Math.round(headingDeg(0,0,-5,0));
+    var wrap=pivotDiff(170,-170);
+    var arcAhead=withinArc(u,15,10,90), arcBehind=withinArc(u,5,10,90), arcEdge=withinArc(u,10,5,90);
+    u.facing=null;setFacingFromMove(u,10,10,10,16);var recS=Math.round(u.facing);
+    u.facing=45;setFacingFromMove(u,10,10,10,10);var kept=u.facing;
+    globalThis.__result={
+      east:east, south:south, west:west, wrap:wrap,
+      arcAhead:arcAhead, arcBehind:arcBehind, arcEdgeInclusive:arcEdge,
+      recordedSouth:recS, keptOnZeroMove:kept
+    };
+  `,
+
+  // 25. Aircraft movement (Pass B): >=20" minimum forward move, 90 deg pivot cap (no rearward dest), only a
+  //     Normal move; reserveAircraft puts them in Reserves at battle start. Non-aircraft unaffected.
+  aircraft_move: `
+    mode='open';GW=40;GH=30;PNAME={1:'A',2:'B'};objectives=[];walls=[];hatchways=[];turn=1;phaseIdx=1;
+    TEMPLATES.jet={name:'Jet',kw:['VEHICLE','AIRCRAFT','FLY'],allKw:['VEHICLE','AIRCRAFT','FLY'],pts:160,m:20,t:10,sv:3,inv:0,w:14,ld:6,oc:0,ranged:[{name:'gun',type:'R',rng:36,a:4,skill:3,s:7,ap:-1,d:2,ab:{}}],melee:[],models:1,abilities:[]};
+    TEMPLATES.inf={name:'Inf',kw:['INFANTRY'],allKw:['INFANTRY'],pts:80,m:6,t:4,sv:4,inv:0,w:1,ld:6,oc:1,ranged:[],melee:[],models:5,abilities:[]};
+    FACTIONS.a={name:'A',units:['jet','inf'],color:'imp'};pFaction[1]='a';pDetach[1]=null;
+    var jet=newUnit('jet',1);jet.deployed=true;jet.hx=5;jet.hy=15;syncModelPos(jet);jet.facing=0; // facing east (+x)
+    var inf=newUnit('inf',1);inf.deployed=true;inf.hx=5;inf.hy=20;syncModelPos(inf);
+    units.length=0;units.push(jet,inf);
+    // (a) short move (<20") rejected — jet stays put
+    tryMove(jet,8,15);                       // 3 cells = 6" -> reject
+    var shortRejected=(jet.hx===5&&jet.hy===15&&!jet.moved);
+    // (b) >=20" forward (east) move within arc accepted
+    tryMove(jet,26,15);                      // 21 cells east = 21" (>=20) within arc -> accept
+    var forwardOK=(jet.hx===26&&jet.moved);
+    // (c) reset, try to move BEHIND heading (west) >=20": should reject (needs >90 deg pivot)
+    jet.moved=false;jet.hx=30;jet.hy=15;jet.facing=0;syncModelPos(jet);
+    tryMove(jet,9,15);                       // 21 cells west = 21" but behind heading -> reject (>90 deg)
+    var rearwardRejected=(jet.hx===30&&!jet.moved);
+    // (d) non-aircraft unaffected: infantry normal 6" move works
+    tryMove(inf,7,20);                       // 2 cells = 4" <= 6"
+    var infMovedNormally=(inf.hx===7&&inf.moved);
+    // (e) reserveAircraft puts a deployed aircraft into reserve
+    var jet2=newUnit('jet',1);jet2.deployed=true;jet2.hx=5;jet2.hy=5;syncModelPos(jet2);units.push(jet2);
+    reserveAircraft(1);
+    var aircraftReserved=(jet2.inReserve===true);
+    globalThis.__result={shortRejected,forwardOK,rearwardRejected,infMovedNormally,aircraftReserved};
+  `,
+
+  // 26. Aircraft combat & Hover (Pass C): aircraft can't charge; only FLY can charge/melee an aircraft;
+  //     aircraft only melee FLY; aircraft with no FLY enemy makes no attacks; Hover strips aircraft rules.
+  aircraft_combat: `
+    mode='open';GW=24;GH=22;PNAME={1:'A',2:'B'};objectives=[];walls=[];hatchways=[];turn=1;phaseIdx=3;
+    TEMPLATES.jet={name:'Jet',kw:['VEHICLE','AIRCRAFT','FLY'],allKw:['VEHICLE','AIRCRAFT','FLY'],pts:160,m:20,t:10,sv:3,inv:0,w:14,ld:6,oc:0,ranged:[],melee:[{name:'strafe',type:'M',rng:0,a:3,skill:3,s:6,ap:-1,d:1,ab:{}}],models:1,abilities:[{name:'Hover',type:'Core',desc:'x'}]};
+    TEMPLATES.inf={name:'Inf',kw:['INFANTRY'],allKw:['INFANTRY'],pts:80,m:6,t:4,sv:4,inv:0,w:1,ld:6,oc:1,ranged:[],melee:[{name:'cc',type:'M',rng:0,a:2,skill:3,s:4,ap:0,d:1,ab:{}}],models:5,abilities:[]};
+    TEMPLATES.flyer={name:'Flyer',kw:['INFANTRY','FLY'],allKw:['INFANTRY','FLY'],pts:90,m:12,t:4,sv:4,inv:0,w:2,ld:6,oc:1,ranged:[],melee:[{name:'cc',type:'M',rng:0,a:3,skill:3,s:5,ap:-1,d:1,ab:{}}],models:3,abilities:[]};
+    FACTIONS.a={name:'A',units:['jet','inf','flyer'],color:'imp'};FACTIONS.b={name:'B',units:['inf','flyer'],color:'xenos'};
+    pFaction[1]='a';pFaction[2]='b';pDetach[1]=null;pDetach[2]=null;
+
+    // (a) aircraft can't charge: beginChargeSelection should refuse (action stays null)
+    var jet=newUnit('jet',1);jet.deployed=true;jet.hx=10;jet.hy=10;syncModelPos(jet);
+    var ground=newUnit('inf',2);ground.deployed=true;ground.hx=11;ground.hy=10;syncModelPos(ground);
+    var flyer=newUnit('flyer',2);flyer.deployed=true;flyer.hx=10;flyer.hy=11;syncModelPos(flyer);
+    units.length=0;units.push(jet,ground,flyer);
+    action=null; beginChargeSelection(jet); var aircraftCantCharge=(action===null);
+
+    // (b) ground (non-FLY) charging: aircraft NOT an eligible target, but the flyer enemy is
+    action=null; beginChargeSelection(ground);
+    var groundTargets=action?action.targets.map(t=>t.id):[];
+    var groundCantTargetAircraft=!groundTargets.includes(jet.id);
+    action=null;
+
+    // (c) melee: aircraft (jet) engaged with both a ground unit and a flyer -> may only hit the flyer
+    var jetFoes=meleeTargetSplit(jet).map(p=>p.enemy.id);
+    var jetOnlyHitsFly=(jetFoes.includes(flyer.id)&&!jetFoes.includes(ground.id));
+
+    // (d) ground unit engaged only with the aircraft -> no legal melee targets (empty split)
+    var lonelyGround=newUnit('inf',2);lonelyGround.deployed=true;lonelyGround.hx=10;lonelyGround.hy=10; // co-located with jet only
+    units.push(lonelyGround);
+    var groundVsAircraftOnly=meleeTargetSplit(lonelyGround).filter(p=>p.enemy.id===jet.id).length===0;
+
+    // (e) Hover strips aircraft behaviour: setHover(true) -> isAircraft false, M=20
+    var hov=newUnit('jet',1);hov.deployed=true;hov.hx=2;hov.hy=2;syncModelPos(hov);
+    var wasAircraft=isAircraft(hov);
+    setHover(hov,true);
+    var hoverStrips=(wasAircraft===true && isAircraft(hov)===false && hov.m===20);
+    setHover(hov,false);
+    var hoverReversible=(isAircraft(hov)===true);
+
+    globalThis.__result={aircraftCantCharge,groundCantTargetAircraft,jetOnlyHitsFly,groundVsAircraftOnly,hoverStrips,hoverReversible};
+  `,
+
+  // 27. Grid resolution invariant: at HEX_INCH=1 the sim grid is 1"/cell. Physical distances must hold —
+  //     an M=6 unit moves up to 6 cells (=6"), 7 cells (=7") is not a plain Normal move; coherency stays 2".
+  grid_resolution: `
+    mode='open';GW=48;GH=44;PNAME={1:'A',2:'B'};objectives=[];walls=[];hatchways=[];turn=1;phaseIdx=1;
+    TEMPLATES.inf={name:'Inf',kw:['INFANTRY'],allKw:['INFANTRY'],pts:80,m:6,t:4,sv:4,inv:0,w:1,ld:6,oc:1,ranged:[],melee:[],models:5,abilities:[]};
+    FACTIONS.a={name:'A',units:['inf'],color:'imp'};pFaction[1]='a';pDetach[1]=null;
+    var u=newUnit('inf',1);u.deployed=true;u.hx=10;u.hy=10;syncModelPos(u);units.length=0;units.push(u);
+    var hexInch=HEX_INCH;
+    // M=6 over 6 cells = 6" -> legal Normal move
+    tryMove(u,16,10); var move6OK=(u.hx===16&&u.moved);
+    // 7 cells = 7" > M6 -> not a plain Normal move (stays, an Advance action would be offered)
+    u.moved=false;u.hx=10;syncModelPos(u);tryMove(u,17,10); var move7NotNormal=(u.hx===10);
+    globalThis.__result={hexInch:hexInch, boardDoubled:(GW===48&&GH===44), move6OK:move6OK, move7NotNormal:move7NotNormal, cohCells:COH_CELLS};
   `,
 
   // 23. Plasmacyte (Necron Destroyer Cult): floor(models/3) tokens granted at battle start; spending one

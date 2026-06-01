@@ -282,6 +282,51 @@
       "choiceOfActionsOK": true
     }
   },
+  "facing_math": {
+    "ok": true,
+    "result": {
+      "east": 0,
+      "south": 90,
+      "west": 180,
+      "wrap": 20,
+      "arcAhead": true,
+      "arcBehind": false,
+      "arcEdgeInclusive": true,
+      "recordedSouth": 90,
+      "keptOnZeroMove": 45
+    }
+  },
+  "aircraft_move": {
+    "ok": true,
+    "result": {
+      "shortRejected": true,
+      "forwardOK": true,
+      "rearwardRejected": true,
+      "infMovedNormally": true,
+      "aircraftReserved": true
+    }
+  },
+  "aircraft_combat": {
+    "ok": true,
+    "result": {
+      "aircraftCantCharge": true,
+      "groundCantTargetAircraft": true,
+      "jetOnlyHitsFly": true,
+      "groundVsAircraftOnly": true,
+      "hoverStrips": true,
+      "hoverReversible": true
+    }
+  },
+  "grid_resolution": {
+    "ok": true,
+    "result": {
+      "hexInch": 1,
+      "boardDoubled": true,
+      "move6OK": true,
+      "move7NotNormal": true,
+      "cohCells": 2
+    }
+  },
   "plasmacyte": {
     "ok": true,
     "result": {

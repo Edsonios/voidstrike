@@ -81,8 +81,10 @@ function refreshPlayerNames(){
   PSHORT={1:sh(PNAME[1]),2:sh(PNAME[2])};
 }
 const PHASES=["Command","Movement","Shooting","Charge","Fight"];
-const HEX_INCH=2;
-let CELL=28, GW=24, GH=22;
+const HEX_INCH=1;          // simulation resolution: 1 cell = 1 inch (finer grid; was 2)
+const _RES=2/HEX_INCH;     // resolution factor vs the original 2"/cell board — cell-based constants scale by this
+let CELL=28, GW=Math.round(24*_RES), GH=Math.round(22*_RES);
+let hoverHx=-1, hoverHy=-1;   // current mouse-hover cell (for move-preview + facing-toward-cursor render)
 let customW=24, customH=22;
 
 let roster={1:{},2:{}};
@@ -168,6 +170,21 @@ function detachOf(p){const d=factionDataFor(p);if(!d||!pDetach[p])return null;re
 function armyRuleOf(p){const det=detachOf(p);if(det&&det.armyRule)return det.armyRule;const d=factionDataFor(p);return d?d.armyRule:null;}
 
 function unitHasKw(u,kw){return (u.kw||[]).includes(kw)||(u.allKw||[]).includes(kw);}
+// AIRCRAFT only if it has the keyword AND is not in Hover mode (Hover strips the AIRCRAFT keyword and rules).
+function isAircraft(u){return !!u && unitHasKw(u,'AIRCRAFT') && !u._hover;}
+function unitCanFly(u){return !!u && (unitHasKw(u,'FLY')||unitHasKw(u,'AIRCRAFT'));}   // AIRCRAFT inherently fly
+const AIRCRAFT_MIN_MOVE=20;
+function stepFromInch(inch){return Math.max(1,Math.ceil(inch/HEX_INCH));}
+/* Hover mode (declared pre-battle for AIRCRAFT with a Hover ability): Move becomes 20", the model loses
+   the AIRCRAFT keyword and all aircraft rules, and does NOT start in Reserves. Modelled with `_hover` -
+   isAircraft() returns false while set, bypassing every aircraft special-case - plus M:=20. Reversible. */
+function unitHasHover(u){return (u.abilities||[]).some(a=>/(^|\b)hover(\b|$)/i.test(a.name||''));}
+function setHover(u,on){
+  if(!u||!unitHasKw(u,'AIRCRAFT'))return false;
+  if(on){ if(u._hover)return true; u._hoverBaseM=u.m; u.m=20; u._hover=true; log("sys",`${u.name} enters Hover mode (Move 20, loses AIRCRAFT rules).`); }
+  else { if(!u._hover)return true; if(typeof u._hoverBaseM==='number')u.m=u._hoverBaseM; u._hover=false; log("sys",`${u.name} leaves Hover mode.`); }
+  return true;
+}
 function unitOnObjective(u){const a=unitAnchor(u);return objectives.some(o=>Math.hypot(o.hx-a.hx,o.hy-a.hy)<=1.5);}
 function isDeathwing(u){
   // Explicit keyword, or (Dark Angels chapter) granted to Terminators / certain veterans / Dreadnoughts / Land Raiders & Repulsors
@@ -1410,6 +1427,7 @@ function newUnit(tplKey,player){
     hx:-1,hy:-1,modelPos:null,deployed:false,moved:false,advanced:false,fellback:false,charged:false,fought:false,
     inReserve:false,_reserveRound:0,_setupThisTurn:false,_arriveExtraMove:null,
     _plasmacytes:0,
+    facing:null,   // heading in degrees (0=east, 90=south on screen y-down); null = no facing tracked. Pass A: written on move, read by nothing yet.
     _capacity:(t.transportCapacity||0),_firingDeck:(t.firingDeck||0),_embarkedIn:null,_embarked:[],_disembarkedThisTurn:false,
     shotWith:[],bshock:false,dead:false,_stratAtk:[],_stratDef:[],_ocBonus:0,_ocMult:1,_orderMove:0,_orderOc:0,_orderLd:0};
 }
@@ -1442,7 +1460,9 @@ function unitAnchor(u){
    read modelPos directly. Cluster pattern: the anchor cell first, then a ring of offsets, so a
    1-model unit sits exactly on the token and larger units fan out by ~1 cell — close enough to the
    2" coherency spacing the board uses without yet enforcing coherency. */
-const _CLUSTER_OFFSETS=[[0,0],[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,-1],[1,-1],[-1,1],[2,0],[-2,0],[0,2]];
+const _CLUSTER_OFFSETS_BASE=[[0,0],[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,-1],[1,-1],[-1,1],[2,0],[-2,0],[0,2]];
+// Scale the per-model cluster offsets so the cluster keeps the same PHYSICAL footprint at any resolution.
+const _CLUSTER_OFFSETS=_CLUSTER_OFFSETS_BASE.map(o=>[Math.round(o[0]*_RES),Math.round(o[1]*_RES)]);
 function syncModelPos(u){
   if(!u||u.dead){if(u)u.modelPos=null;return;}
   const n=Math.max(1,u.models|0);
@@ -1467,6 +1487,27 @@ function syncModelPos(u){
    cluster around the requested anchor, the recomputed centroid equals what callers set, so all existing
    behaviour is byte-identical (proven by the oracle). The win: per-model writes (moveModel) now update
    the anchor automatically, and any future code that displaces individual models keeps the token honest. */
+/* ---- FACING / HEADING math (Pass A — pure helpers, dormant) ---------------------------------------
+   Headings are in degrees, 0°=+x (east), increasing clockwise on the screen's y-down grid (90°=south).
+   These are pure functions used by the aircraft movement subsystem (Pass B). In Pass A they are only
+   exercised by `setFacingFromMove`, which records a unit's heading as its direction of travel; nothing
+   READS facing yet, so behaviour is unchanged. */
+function headingDeg(fromx,fromy,tox,toy){
+  return Math.atan2(toy-fromy, tox-fromx)*180/Math.PI;   // [-180,180]
+}
+function normDeg(a){ a%=360; if(a>180)a-=360; if(a<-180)a+=360; return a; }
+function pivotDiff(a,b){ return Math.abs(normDeg(b-a)); }   // smallest angle between two headings, [0,180]
+// Is target point within the forward arc (±arcDeg of facing) of a unit at its anchor? (read by Pass B/C)
+function withinArc(u,tx,ty,arcDeg){
+  if(u.facing==null)return true;                            // no facing tracked -> unconstrained
+  const a=unitAnchor(u);
+  return pivotDiff(u.facing, headingDeg(a.hx,a.hy,tx,ty)) <= arcDeg;
+}
+// Record heading from a just-completed move (called at every move commit in Pass A; harmless until read).
+function setFacingFromMove(u,fromx,fromy,tox,toy){
+  if(fromx===tox&&fromy===toy)return;                       // no displacement -> keep prior heading
+  u.facing=headingDeg(fromx,fromy,tox,toy);
+}
 function recenterToken(u){
   if(!u||!u.modelPos||!u.modelPos.length)return;
   let sx=0,sy=0;for(const p of u.modelPos){sx+=p.hx;sy+=p.hy;}
@@ -1491,7 +1532,7 @@ function moveModel(u,i,hx,hy){
    group. A freshly-synced symmetric cluster always passes (so existing behaviour is unchanged and
    the oracle stays green); incoherency only arises once individual models are moved apart by the
    capability layer — which is exactly when the rule should bite.                                   */
-const COH_CELLS=2;   // "within 2 horizontally" on the 2"-per-cell board, matched to the cluster radius
+const COH_CELLS=Math.round(2/HEX_INCH);   // 2 physical inches of coherency, in cells (scales with resolution)
 function _linkCount(modelPos,i){
   let n=0;const a=modelPos[i];
   for(let j=0;j<modelPos.length;j++){if(j===i)continue;
@@ -1546,10 +1587,18 @@ function meleeTargetSplit(u){
   const foeReach=(mp,e)=>{const ea=unitAnchor(e);if(segBlocked(mp.hx,mp.hy,ea.hx,ea.hy))return false;
     const reach=ENGAGE_IN+(pathThroughOpenHatch({hx:mp.hx,hy:mp.hy},e)?1.3:0);return rawDist(mp,ea)<=reach;};
   let foes;
+  // AIRCRAFT melee rules: an AIRCRAFT can only make melee attacks against units that can FLY; and only
+  // units that can FLY can make melee attacks against AIRCRAFT. So a (u,e) melee pairing is legal unless
+  // one side is an aircraft and the other cannot FLY.
+  const meleeLegal=e=>{
+    if(isAircraft(u) && !unitCanFly(e))return false;   // aircraft attacker may only hit FLY
+    if(isAircraft(e) && !unitCanFly(u))return false;   // non-FLY may not hit aircraft
+    return true;
+  };
   if(hasPos){
-    foes=units.filter(e=>!e.dead&&e.player!==u.player&&u.modelPos.some(mp=>foeReach(mp,e)));
+    foes=units.filter(e=>!e.dead&&e.player!==u.player&&meleeLegal(e)&&u.modelPos.some(mp=>foeReach(mp,e)));
   }else{
-    foes=units.filter(e=>!e.dead&&e.player!==u.player&&engaged(u,e));
+    foes=units.filter(e=>!e.dead&&e.player!==u.player&&meleeLegal(e)&&engaged(u,e));
   }
   if(!foes.length)return [];
   const anchorClosest=()=>{let best=foes[0],bd=1e9;for(const e of foes){const d=dist(u,e);if(d<bd){bd=d;best=e;}}return best;};
@@ -1577,7 +1626,7 @@ function belowHalf(u){return totalWounds(u)<=maxWounds(u)/2;}
 function buildBattle(){
   refreshPlayerNames();
   const M=MODES[mode];
-  if(mode==='sandbox'){GW=clamp(customW,12,40);GH=clamp(customH,10,34);}
+  if(mode==='sandbox'){GW=clamp(Math.round(customW*_RES),Math.round(12*_RES),Math.round(40*_RES));GH=clamp(Math.round(customH*_RES),Math.round(10*_RES),Math.round(34*_RES));}
   else{[GW,GH]=M.grid;}
   CELL=Math.floor(Math.min(760/GW,660/GH));CELL=clamp(CELL,16,34);
   cv.width=GW*CELL;cv.height=GH*CELL;
@@ -1715,6 +1764,43 @@ function segBlocked(ax,ay,bx,by){
 function rawDist(a,b){return Math.hypot(a.hx-b.hx,a.hy-b.hy)*HEX_INCH;}
 function dist(a,b){return rawDist(unitAnchor(a),unitAnchor(b));}
 function visible(a,b){const A=unitAnchor(a),B=unitAnchor(b);return !segBlocked(A.hx,A.hy,B.hx,B.hy);}
+/* Walkable path cost between two cells, routing AROUND walls (BFS over the cell grid, 8-connected; a step
+   is allowed only if the segment between adjacent cell centres is not wall-blocked). Returns the shortest
+   path length in inches, or Infinity if unreachable within the search bound. Used so that ground moves pay
+   the longer go-around distance instead of being hard-blocked by a wall. Bounded by maxCells for cost. */
+function pathCostCells(ax,ay,bx,by,maxCells){
+  if(ax===bx&&ay===by)return 0;
+  maxCells=maxCells||40;
+  const key=(x,y)=>x+','+y;
+  const start=key(ax,ay), goal=key(bx,by);
+  // Dijkstra-lite: diagonal step costs sqrt2, orthogonal 1; cap explored radius for performance.
+  const distMap=new Map([[start,0]]);
+  const pq=[{x:ax,y:ay,g:0}];
+  while(pq.length){
+    pq.sort((p,q)=>p.g-q.g); const cur=pq.shift();
+    if(cur.x===bx&&cur.y===by)return cur.g;
+    if(cur.g>maxCells)continue;
+    for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++){
+      if(!dx&&!dy)continue; const nx=cur.x+dx,ny=cur.y+dy;
+      if(nx<0||ny<0||nx>=GW||ny>=GH)continue;
+      if(segBlocked(cur.x,cur.y,nx,ny))continue;            // wall between the two cells -> cannot step
+      // a diagonal step must not cut through a wall corner: the two orthogonal "corner" cells it passes
+      // between must both be reachable without crossing a wall (checked from both endpoints).
+      if(dx&&dy&&(segBlocked(cur.x,cur.y,cur.x+dx,cur.y)||segBlocked(cur.x,cur.y,cur.x,cur.y+dy)
+                 ||segBlocked(nx,ny,nx-dx,ny)||segBlocked(nx,ny,nx,ny-dy)))continue;
+      const step=(dx&&dy)?Math.SQRT2:1; const ng=cur.g+step;
+      const k=key(nx,ny);
+      if(ng<(distMap.has(k)?distMap.get(k):Infinity)){ distMap.set(k,ng); pq.push({x:nx,y:ny,g:ng}); }
+    }
+  }
+  return distMap.has(goal)?distMap.get(goal):Infinity;
+}
+// Path distance in INCHES (Infinity if unreachable). Aircraft ignore this (they fly straight over terrain).
+function pathInches(ax,ay,bx,by,maxInch){
+  if(!walls.length)return Math.hypot(ax-bx,ay-by)*HEX_INCH;   // no walls -> straight line (unchanged behaviour)
+  const cells=pathCostCells(ax,ay,bx,by,Math.ceil((maxInch||40)/HEX_INCH)+4);
+  return cells*HEX_INCH;
+}
 function pathThroughOpenHatch(a,b){
   const aa=unitAnchor(a),bb=unitAnchor(b);
   const A=cellCenter(aa.hx,aa.hy),B=cellCenter(bb.hx,bb.hy);
@@ -2113,16 +2199,34 @@ function tryMove(u,hx,hy){
   if(PHASES[phaseIdx]!=="Movement"){updateHint("Only during Movement.");return;}
   if(u.moved){updateHint(`${u.name} already moved.`);return;}
   if(cellOccupied(hx,hy,u.id)){updateHint("Cell occupied.");return;}
-  if(segBlocked(u.hx,u.hy,hx,hy)){updateHint("A wall or closed hatchway blocks that path.");return;}
-  const d=Math.hypot(u.hx-hx,u.hy-hy)*HEX_INCH;
+  const dStraight=Math.hypot(u.hx-hx,u.hy-hy)*HEX_INCH;
+  let d=dStraight;   // aircraft fly straight over terrain; ground units use a wall-aware path distance (below)
+  // ---- AIRCRAFT movement (facing-constrained) ----------------------------------------------------
+  // Only a Normal move; must travel a minimum of 20" straight forward, then pivot up to 90° (modelled as:
+  // the destination must lie within the forward ±90° arc of current heading, since reaching a point behind
+  // would require a turn >90° before moving). Cannot Advance/Fall Back/Remain Stationary. If it cannot make
+  // a legal >=20" move (or none is offered), the aircraft is placed into Strategic Reserves and returns next turn.
+  if(isAircraft(u)){
+    if(d<AIRCRAFT_MIN_MOVE){updateHint(`Aircraft must move at least ${AIRCRAFT_MIN_MOVE}″ straight forward.`);return;}
+    if(u.facing!=null && !withinArc(u,hx,hy,90)){updateHint("Aircraft can pivot at most 90° — that heading is behind it.");return;}
+    const wouldERa=units.some(e=>!e.dead&&e.player!==u.player&&Math.hypot(e.hx-hx,e.hy-hy)*HEX_INCH<=ENGAGE_IN&&!segBlocked(e.hx,e.hy,hx,hy));
+    if(wouldERa){updateHint("Cannot end on top of / within Engagement Range of a model.");return;}
+    const _fx=u.hx,_fy=u.hy;u.hx=hx;u.hy=hy;u.moved=true;syncModelPos(u);setFacingFromMove(u,_fx,_fy,hx,hy);
+    log("sys",`${u.name} (Aircraft) makes a ${d.toFixed(1)}″ pass.`);
+    render();renderAll();updateHint();return;
+  }
+  // Ground move: route around walls. Path distance costs the longer go-around; unreachable -> blocked.
+  const eMcap=u.m+(u._bfMove||0)+(u._orderMove||0)+6;   // generous cap for the path search (Move + max Advance)
+  d=pathInches(u.hx,u.hy,hx,hy,eMcap);
+  if(!isFinite(d)){updateHint("No path — a wall or closed hatchway blocks every route there.");return;}
   const eM=u.m+(u._bfMove||0)+(u._orderMove||0);   // effective Move incl. Battle Focus + AM Move! Move! Move! Order
   const startER=inER(u);
   const wouldER=units.some(e=>!e.dead&&e.player!==u.player&&Math.hypot(e.hx-hx,e.hy-hy)*HEX_INCH<=ENGAGE_IN&&!segBlocked(e.hx,e.hy,hx,hy));
   if(startER){
-    if(d<=eM&&!wouldER){u.hx=hx;u.hy=hy;u.fellback=true;u.moved=true;syncModelPos(u);log("sys",`${u.name} Falls Back ${d.toFixed(1)}″.`);
+    if(d<=eM&&!wouldER){const _fx=u.hx,_fy=u.hy;u.hx=hx;u.hy=hy;u.fellback=true;u.moved=true;syncModelPos(u);setFacingFromMove(u,_fx,_fy,hx,hy);log("sys",`${u.name} Falls Back ${d.toFixed(1)}″.`);
       if(u.bshock){const r=d6();if(r<=2){u.models=Math.max(0,u.models-1);log("kill","&nbsp;&nbsp;Desperate Escape: 1 model lost.");}}}
     else{updateHint("In Engagement Range — Fall Back clear of the enemy, or stay.");return;}
-  }else if(d<=eM&&!wouldER){u.hx=hx;u.hy=hy;u.moved=true;syncModelPos(u);log("sys",`${u.name} Normal move ${d.toFixed(1)}″.`);}
+  }else if(d<=eM&&!wouldER){const _fx=u.hx,_fy=u.hy;u.hx=hx;u.hy=hy;u.moved=true;syncModelPos(u);setFacingFromMove(u,_fx,_fy,hx,hy);log("sys",`${u.name} Normal move ${d.toFixed(1)}″.`);}
   else if(!wouldER){
     // needs an Advance — set up an interactive roll
     if(d>eM+6){updateHint(`Too far even with a max Advance (need ${d.toFixed(1)}″, max ${eM+6}″).`);return;}
@@ -2134,7 +2238,7 @@ function tryMove(u,hx,hy){
 function rollAdvance(){
   const a=action;const adv=d6();const tot=a.u.m+(a.u._bfMove||0)+(a.u._orderMove||0)+adv;
   log("",`${a.u.name} Advance: rolled <b>${adv}</b> → ${tot}″ move.`);logDice([{v:adv}]);
-  if(a.need<=tot){a.u.hx=a.hx;a.u.hy=a.hy;a.u.moved=true;a.u.advanced=true;syncModelPos(a.u);
+  if(a.need<=tot){const _fx=a.u.hx,_fy=a.u.hy;a.u.hx=a.hx;a.u.hy=a.hy;a.u.moved=true;a.u.advanced=true;syncModelPos(a.u);setFacingFromMove(a.u,_fx,_fy,a.hx,a.hy);
     log("sys",`&nbsp;&nbsp;Reached destination (${a.need.toFixed(1)}″). No shooting (non-Assault) or charging.`);}
   else log("miss",`&nbsp;&nbsp;Advance fell short of ${a.need.toFixed(1)}″ — ${a.u.name} stays put.`);
   action=null;showActionPanel(false);render();renderAll();updateHint();
@@ -2167,11 +2271,13 @@ function rollShoot(){
 /* ---- CHARGE: select a legal target, then roll 2D6 ---- */
 function beginChargeSelection(u){
   if(u.player!==turn||u.dead||PHASES[phaseIdx]!=="Charge")return;
+  if(isAircraft(u)){updateHint(`${u.name} (Aircraft) cannot declare a charge.`);return;}   // AIRCRAFT cannot charge
   if((u.advanced&&!unitHasElig(u,'eligChargeAfterAdvance'))||(u.fellback&&!unitHasElig(u,'eligChargeAfterFallBack'))){updateHint(`${u.name} can't charge (Advanced/Fell Back).`);return;}
   if(u.charged){updateHint(`${u.name} already charged.`);return;}
   if(inER(u)){updateHint(`${u.name} already in combat.`);return;}
-  const targets=units.filter(e=>!e.dead&&e.player!==turn&&dist(u,e)<=12&&!segBlocked(u.hx,u.hy,e.hx,e.hy));
-  if(!targets.length){updateHint(`No enemy within 12″ of ${u.name}.`);return;}
+  // Only units that can FLY may select an AIRCRAFT as a charge target.
+  const targets=units.filter(e=>!e.dead&&e.player!==turn&&dist(u,e)<=12&&!segBlocked(u.hx,u.hy,e.hx,e.hy)&&(!isAircraft(e)||unitCanFly(u)));
+  if(!targets.length){updateHint(`No eligible enemy within 12″ of ${u.name}.`);return;}
   action={kind:'charge',u,targets,target:null};selId=u.id;showActionPanel(true);renderAction();render();
 }
 function chargePickTarget(t){if(action&&action.kind==='charge'){action.target=t.id;renderAction();render();}}
@@ -2187,7 +2293,7 @@ function moveAdjacent(u,tgt){
   const dx=Math.sign(tgt.hx-u.hx),dy=Math.sign(tgt.hy-u.hy);
   let nx=clamp(tgt.hx-dx,0,GW-1),ny=clamp(tgt.hy-dy,0,GH-1);
   if(cellOccupied(nx,ny,u.id)){nx=clamp(tgt.hx-dx,0,GW-1);ny=clamp(tgt.hy,0,GH-1);}
-  u.hx=nx;u.hy=ny;syncModelPos(u);
+  const _fx=u.hx,_fy=u.hy;u.hx=nx;u.hy=ny;syncModelPos(u);setFacingFromMove(u,_fx,_fy,nx,ny);
 }
 
 /* In-combat movement on the single-token board. The real game moves each MODEL up to 3" toward the closest
@@ -2223,7 +2329,7 @@ function stepToward(u,tx,ty,maxInch){
       if(nd<bd-1e-6){bd=nd;best={nx,ny,cost:stepCost};}
     }
     if(!best)break;
-    u.hx=best.nx;u.hy=best.ny;budget-=best.cost;moved=true;syncModelPos(u);
+    const _fx=u.hx,_fy=u.hy;u.hx=best.nx;u.hy=best.ny;budget-=best.cost;moved=true;syncModelPos(u);setFacingFromMove(u,_fx,_fy,best.nx,best.ny);
   }
   return moved;
 }
@@ -2533,7 +2639,7 @@ function placeUnit(hx,hy){
   u.hx=hx;u.hy=hy;u.deployed=true;syncModelPos(u);log("sys",`${PNAME[p]} deploys ${u.name}.`);
   deployIdx[p]++;deployTurn=deployTurn===1?2:1;
   if(deployIdx[1]>=deployList[1].length&&deployIdx[2]>=deployList[2].length){
-    deploying=false;turn=1;phaseIdx=0;log("hd","◆ ALL FORCES DEPLOYED — BATTLE BEGINS");grantBattleFocus(1);grantBattleFocus(2);grantResurgence(1);grantResurgence(2);grantFlux(1);grantFlux(2);seedDread(1);seedDread(2);allianceOfAgony(1);allianceOfAgony(2);ecSeedFavoured(1);ecSeedFavoured(2);ecMakePledge(1,1);ecMakePledge(2,1);grantMiracleRound(1);grantMiracleRound(2);grantPlasmacytes(1);grantPlasmacytes(2);beginPhase();}
+    deploying=false;turn=1;phaseIdx=0;log("hd","◆ ALL FORCES DEPLOYED — BATTLE BEGINS");grantBattleFocus(1);grantBattleFocus(2);grantResurgence(1);grantResurgence(2);grantFlux(1);grantFlux(2);seedDread(1);seedDread(2);allianceOfAgony(1);allianceOfAgony(2);ecSeedFavoured(1);ecSeedFavoured(2);ecMakePledge(1,1);ecMakePledge(2,1);grantMiracleRound(1);grantMiracleRound(2);grantPlasmacytes(1);grantPlasmacytes(2);reserveAircraft(1);reserveAircraft(2);beginPhase();}
   selId=null;renderAll();render();updateHint();renderPhases();
 }
 
@@ -2603,7 +2709,51 @@ function render(){
     // acted marker
     let acted=u.player===turn&&((PHASES[phaseIdx]==="Movement"&&u.moved)||(PHASES[phaseIdx]==="Charge"&&u.charged)||(PHASES[phaseIdx]==="Fight"&&u.fought));
     if(acted){ctx.fillStyle=gc('--dim');ctx.beginPath();ctx.arc(c.x+CELL*0.30,c.y-CELL*0.30,3,0,7);ctx.fill();}
+    // facing indicator: a short prow line from the centre in the heading direction (units that track facing)
+    if(u.facing!=null){
+      const rad=u.facing*Math.PI/180, r0=CELL*0.40, r1=CELL*0.62;
+      ctx.beginPath();ctx.moveTo(c.x+Math.cos(rad)*r0,c.y+Math.sin(rad)*r0);ctx.lineTo(c.x+Math.cos(rad)*r1,c.y+Math.sin(rad)*r1);
+      ctx.strokeStyle=isAircraft(u)?gc('--gold'):'rgba(180,200,220,.7)';ctx.lineWidth=isAircraft(u)?3:2;ctx.stroke();
+      // arrowhead
+      ctx.beginPath();ctx.moveTo(c.x+Math.cos(rad)*r1,c.y+Math.sin(rad)*r1);
+      ctx.lineTo(c.x+Math.cos(rad+2.6)*CELL*0.5,c.y+Math.sin(rad+2.6)*CELL*0.5);
+      ctx.lineTo(c.x+Math.cos(rad-2.6)*CELL*0.5,c.y+Math.sin(rad-2.6)*CELL*0.5);
+      ctx.closePath();ctx.fillStyle=isAircraft(u)?gc('--gold'):'rgba(180,200,220,.7)';ctx.fill();
+    }
   });
+  // ---- move-preview ghost + facing-toward-cursor (selected movable unit, hovering a cell) -------------
+  drawMovePreview();
+}
+/* Translucent preview at the hovered cell for the selected movable unit, plus a heading arrow from the unit
+   toward the cursor (showing the direction it would face after moving). Pure render; reads hoverHx/hoverHy. */
+function drawMovePreview(){
+  const sel=units.find(u=>u.id===selId);
+  if(!sel||sel.dead||sel.player!==turn||deploying||placingTerrain||action)return;
+  if(PHASES[phaseIdx]!=="Movement"||sel.moved)return;
+  if(hoverHx<0||hoverHy<0||hoverHx>=GW||hoverHy>=GH)return;
+  if(hoverHx===sel.hx&&hoverHy===sel.hy)return;
+  const from=cellCenter(sel.hx,sel.hy), to=cellCenter(hoverHx,hoverHy);
+  const straight=Math.hypot(sel.hx-hoverHx,sel.hy-hoverHy)*HEX_INCH;
+  // aircraft fly straight; ground units pay the wall-aware path distance (matches tryMove)
+  const dInch=isAircraft(sel)?straight:pathInches(sel.hx,sel.hy,hoverHx,hoverHy,(sel.m+(sel._bfMove||0)+(sel._orderMove||0)+6));
+  // legality preview: aircraft need >=20" and within 90 deg arc; others within Move (rough, ignores Advance)
+  let ok;
+  if(isAircraft(sel)) ok = straight>=AIRCRAFT_MIN_MOVE && (sel.facing==null||withinArc(sel,hoverHx,hoverHy,90)) && !segBlocked(sel.hx,sel.hy,hoverHx,hoverHy);
+  else ok = isFinite(dInch) && dInch<=(sel.m+(sel._bfMove||0)+(sel._orderMove||0)) && !cellOccupied(hoverHx,hoverHy,sel.id);
+  // travel line
+  ctx.beginPath();ctx.moveTo(from.x,from.y);ctx.lineTo(to.x,to.y);
+  ctx.strokeStyle=ok?'rgba(155,211,74,.55)':'rgba(184,52,42,.5)';ctx.setLineDash([5,4]);ctx.lineWidth=1.5;ctx.stroke();ctx.setLineDash([]);
+  // translucent ghost token at destination
+  ctx.globalAlpha=0.45;
+  ctx.beginPath();ctx.arc(to.x,to.y,CELL*0.40,0,7);ctx.fillStyle=ok?(sel.player===1?gc('--imp'):gc('--cha')):'rgba(120,40,34,.8)';ctx.fill();
+  ctx.lineWidth=1.5;ctx.strokeStyle=ok?gc('--gold2'):gc('--blood2');ctx.stroke();
+  ctx.globalAlpha=1;
+  // facing-toward-cursor arrow from the destination ghost (where it would point after moving)
+  const rad=headingDeg(sel.hx,sel.hy,hoverHx,hoverHy)*Math.PI/180;
+  ctx.beginPath();ctx.moveTo(to.x+Math.cos(rad)*CELL*0.40,to.y+Math.sin(rad)*CELL*0.40);ctx.lineTo(to.x+Math.cos(rad)*CELL*0.66,to.y+Math.sin(rad)*CELL*0.66);
+  ctx.strokeStyle='rgba(240,212,105,.8)';ctx.lineWidth=2;ctx.stroke();
+  // distance label
+  ctx.fillStyle='#cfe';ctx.font='10px Share Tech Mono';ctx.textAlign='center';ctx.fillText(isFinite(dInch)?dInch.toFixed(0)+'″':'—',to.x,to.y-CELL*0.55);
 }
 
 /* ---- ACTION PANEL ---- */
@@ -3313,6 +3463,15 @@ function autoIssueOrders(p){
 function unitHasPlasmacyte(u){
   return (u.abilities||[]).some(a=>/plasmacyte/i.test(a.name||''));
 }
+/* Aircraft deploy into Reserves: at battle start, any non-Hover AIRCRAFT unit must start in Strategic
+   Reserves (then arrives via the normal reinforcement path). Hover-mode aircraft are excluded (they lost
+   the AIRCRAFT keyword and deploy normally). _reserveRound is stamped 0 by reserveUnit so they are subject
+   to the standard end-of-R3 destruction unless they have arrived. */
+function reserveAircraft(p){
+  units.forEach(u=>{ if(u.player!==p||u.dead)return;
+    if(isAircraft(u) && u.deployed && !u.inReserve){ reserveUnit(u,true); log("sys",`${u.name} (Aircraft) begins in Reserves.`); }
+  });
+}
 function grantPlasmacytes(p){
   units.forEach(u=>{ if(u.player!==p||u.dead)return;
     if(unitHasPlasmacyte(u)){ u._plasmacytes=Math.floor(Math.max(1,u.models)/3);
@@ -3636,6 +3795,13 @@ window.addEventListener('DOMContentLoaded',async()=>{
   $('resetBtn').onclick=backToMuster;
   $('modalReset').onclick=backToMuster;
   cv.addEventListener('click',boardClick);
+  cv.addEventListener('mousemove',e=>{
+    const r=cv.getBoundingClientRect();
+    const fx=(e.clientX-r.left)/(r.width/GW),fy=(e.clientY-r.top)/(r.height/GH);
+    const hx=Math.floor(fx),hy=Math.floor(fy);
+    if(hx!==hoverHx||hy!==hoverHy){hoverHx=hx;hoverHy=hy;if(typeof render==='function')render();}
+  });
+  cv.addEventListener('mouseleave',()=>{hoverHx=-1;hoverHy=-1;if(typeof render==='function')render();});
 
   // ADMIN panel (password-gated): contains all fetch/import/export controls
   $('dpToggle').onclick=()=>{const b=$('dpBody');b.style.display=b.style.display==='none'?'block':'none';};
@@ -3681,6 +3847,24 @@ function autoResolvePhase(){
   const ph=PHASES[phaseIdx];
   if(ph==="Movement"){
     units.filter(u=>u.player===turn&&!u.dead).forEach(u=>{
+      // Aircraft: must make a >=20" forward pass (within 90 deg of heading) or go to Strategic Reserves (returns next turn).
+      if(isAircraft(u)){
+        let best=null,bestScore=-1;
+        const reach=Math.max(stepFromInch(AIRCRAFT_MIN_MOVE), stepFromInch(u.m+8));
+        for(let dx=-reach;dx<=reach;dx++)for(let dy=-reach;dy<=reach;dy++){
+          const nx=u.hx+dx,ny=u.hy+dy;if(nx<0||ny<0||nx>=GW||ny>=GH)continue;
+          const dInch=Math.hypot(dx,dy)*HEX_INCH; if(dInch<AIRCRAFT_MIN_MOVE)continue;
+          if(u.facing!=null && !withinArc(u,nx,ny,90))continue;
+          if(cellOccupied(nx,ny,u.id))continue;if(segBlocked(u.hx,u.hy,nx,ny))continue;
+          if(units.some(e=>!e.dead&&e.player!==u.player&&Math.hypot(e.hx-nx,e.hy-ny)*HEX_INCH<=ENGAGE_IN))continue;
+          const foe=units.filter(e=>!e.dead&&e.player!==u.player).sort((a,b)=>Math.hypot(a.hx-nx,a.hy-ny)-Math.hypot(b.hx-nx,b.hy-ny))[0];
+          const score=foe? -Math.hypot(foe.hx-nx,foe.hy-ny) : dInch;
+          if(score>bestScore){bestScore=score;best={nx,ny};}
+        }
+        if(best){const _fx=u.hx,_fy=u.hy;u.hx=best.nx;u.hy=best.ny;u.moved=true;syncModelPos(u);setFacingFromMove(u,_fx,_fy,best.nx,best.ny);log("sys",`${u.name} (Aircraft) makes a pass.`);}
+        else{reserveUnit(u);log("sys",`${u.name} (Aircraft) leaves the table edge - into Strategic Reserves.`);}
+        return;
+      }
       if(inER(u))return;   // stay and fight
       const foes=units.filter(e=>!e.dead&&e.player!==u.player);if(!foes.length)return;
       foes.sort((a,b)=>dist(u,a)-dist(u,b));const foe=foes[0];

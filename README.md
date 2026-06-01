@@ -691,3 +691,11 @@ The second re-upload was STILL version:1 with no baseMm/deadlyDemise — same st
 To stop round-tripping: the running build number is now stamped into the ALWAYS-VISIBLE header subtitle on page load (e.g. "WARHAMMER 40,000 · BOARDING ACTIONS · build v3"). Before fetching, just read the header — if it doesn't say "build v3", the browser has stale JS and the fetch will produce v1 data again.
 
 CHECKLIST to get base sizes: (1) confirm app.js is committed to GitHub (the file in outputs has BUILD=3); (2) Netlify 'Clear cache and deploy site' and wait for the deploy to finish; (3) open the app and HARD-REFRESH (Cmd/Ctrl+Shift+R); (4) READ THE HEADER — it must say 'build v3'; (5) only then Fetch and re-upload. 28 scenarios green.
+
+
+### Base-size field auto-detect (v4) — the column name was a guess
+The v3 export came through correctly (version:3, deploy chain confirmed via the header build stamp) but baseMm was STILL 0 everywhere. Since the Fetch flow runs buildFromCSV on fresh CSVs, the v3 parser DID run — it just found nothing, because it read `lead.base_size`, a column name I guessed from memory (a violation of the project's never-encode-from-memory rule). The real Wahapedia column may be named differently or formatted differently.
+
+v4 fixes this without guessing: instead of reading a named column, the importer now scans EVERY field of the lead model row through `parseBaseMm` and takes the largest mm value found — so it locates the base size whatever the column is called. It also logs the model-row column names + a sample row to the browser console once per import (`[VOIDSTRIKE] Datasheets_models columns: ...`), so the actual schema is visible rather than assumed. BUILD bumped to 4 (header will read 'build v4').
+
+NEXT FETCH: after deploying v4 and hard-refreshing (header must say build v4), Fetch and re-upload. If base sizes appear — done. If they're STILL 0, open the browser console during the fetch and paste me the `[VOIDSTRIKE] Datasheets_models columns:` line — that tells us definitively whether Wahapedia's model CSV even carries a base size, and under what name, so we stop guessing. 28 scenarios green.

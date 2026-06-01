@@ -83,7 +83,7 @@ function refreshPlayerNames(){
 const PHASES=["Command","Movement","Shooting","Charge","Fight"];
 const HEX_INCH=1;          // simulation resolution: 1 cell = 1 inch (finer grid; was 2)
 const _RES=2/HEX_INCH;     // resolution factor vs the original 2"/cell board — cell-based constants scale by this
-const BUILD=3;   // data-pipeline build: v3 = base sizes (baseMm) + Deadly Demise capture. Shown in admin status so a stale deploy is visible before fetching.
+const BUILD=4;   // v4 = base-size column AUTO-DETECT (scans all model-row fields) + fetch-log of model columns. v3 added baseMm/deadlyDemise. Shown in admin status to expose stale deploys.
 let CELL=28, GW=Math.round(24*_RES), GH=Math.round(22*_RES);
 let hoverHx=-1, hoverHy=-1;   // current mouse-hover cell (for move-preview + facing-toward-cursor render)
 let customW=24, customH=22;
@@ -1040,10 +1040,14 @@ function buildFromCSV(tables){
         opts=byDs(Datasheets_options);
 
   const newTpl={}, facUnits={};
+  // One-time diagnostic: log the actual column names present on a model row, so the real base-size field
+  // (whatever Wahapedia names it) is visible in the fetch log instead of guessed.
+  let _loggedCols=false;
   Datasheets.forEach(ds=>{
     if(ds.virtual==='true')return;
     const mlist=models[ds.id];if(!mlist||!mlist.length)return;
     const lead=mlist[0];
+    if(!_loggedCols){_loggedCols=true; try{console.log('[VOIDSTRIKE] Datasheets_models columns:',Object.keys(lead).join(', ')); console.log('[VOIDSTRIKE] sample model row:',JSON.stringify(lead).slice(0,400));}catch(e){} }
     const m=toInt(lead.M,6),t=toInt(lead.T,4),sv=svNum(lead.Sv),w=toInt(lead.W,1),
           ld=toInt(lead.Ld,7),oc=toInt(lead.OC,1),inv=lead.inv_sv?svNum(lead.inv_sv):0;
     const allKw=(kws[ds.id]||[]).map(k=>({kw:(k.keyword||k.name||'').toUpperCase(),fac:k.is_faction_keyword==='true'})).filter(k=>k.kw);
@@ -1101,10 +1105,12 @@ function buildFromCSV(tables){
         deadlyDemise = dm ? (/d/i.test(dm[1])?dm[1].toUpperCase():toInt(dm[1],0)) : '?';
       }
     });
-    // Base size (mm): Wahapedia's Datasheets_models carries a `base_size` field (e.g. "32mm", "40mm",
-    // "120 x 92mm" oval, or with the ⌀ symbol). Parse the largest dimension in mm; fall back to the
-    // model name's "(⌀ x mm)" suffix; null if absent (renderer then uses the keyword default).
-    let baseMm=parseBaseMm(lead&&lead.base_size) || parseBaseMm(lead&&lead.name) || parseBaseMm(ds.name);
+    // Base size (mm): scan ALL columns of the lead model row for a base-size token (Wahapedia's column
+    // name has varied: base_size / base_size_descr / etc.). This avoids hardcoding a column name that may
+    // not match the actual CSV. Falls back to the unit name's "(⌀ x mm)" suffix; 0 if none found.
+    let baseMm=0;
+    if(lead){ for(const k in lead){ const v=parseBaseMm(lead[k]); if(v>baseMm)baseMm=v; } }
+    if(!baseMm)baseMm=parseBaseMm(ds.name);
     newTpl[key]={name:ds.name,kw:kwList.length?kwList:["INFANTRY"],factionKw,allKw:allKwUpper,pts:pts||0,role:ds.role||'',
       m,t,sv,inv,w,ld,oc,models:modelCount,
       ranged,melee:melee.length?melee:[W("Close combat weapon","M",0,1,4,t,0,1)],

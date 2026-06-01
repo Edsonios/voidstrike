@@ -791,10 +791,11 @@ function clearStoredData(){try{localStorage.removeItem(LS_KEY);}catch(e){}}
    onto the template; null leaves it unknown (engine uses its dormant/default handling and can log a note). */
 function applyXValues(){
   if(typeof X_VALUES==='undefined')return;
-  const fd=X_VALUES.firingDeck||{}, dd=X_VALUES.deadlyDemise||{}, sc=X_VALUES.scouts||{};
+  const fd=X_VALUES.firingDeck||{}, dd=X_VALUES.deadlyDemise||{}, sc=X_VALUES.scouts||{}, bs=X_VALUES.baseSizes||{};
   Object.keys(fd).forEach(k=>{const t=TEMPLATES[k];if(t&&fd[k]!=null)t.firingDeck=fd[k];});
   Object.keys(dd).forEach(k=>{const t=TEMPLATES[k];if(t&&dd[k]!=null)t.deadlyDemise=dd[k];});
   Object.keys(sc).forEach(k=>{const t=TEMPLATES[k];if(t&&sc[k]!=null)t.scoutsMove=sc[k];});
+  Object.keys(bs).forEach(k=>{const t=TEMPLATES[k];if(t&&bs[k]!=null)t.baseMm=bs[k];});   // exact base diameter (mm) override
 }
 function applyBundle(p){
   if(!p||!p.TEMPLATES||!p.FACTIONS)return false;
@@ -2242,6 +2243,66 @@ function doExtraMove(u,dice){
 }
 
 /* ---- MOVEMENT: normal moves are click-to-move; advancing prompts a dice roll ---- */
+/* Staged movement (setup -> confirm): a click during Movement does not resolve immediately. It STAGES a
+   proposed destination (and a model line orientation) shown translucent; the player confirms to commit or
+   cancels to discard. This is the template the other phases reuse. The staged plan lives on `action`:
+     {kind:'moveStage', u, hx, hy, ax,ay,bx,by (model line endpoints), legal, kindOfMove} */
+function beginMoveStage(u,hx,hy){
+  if(u.player!==turn){updateHint("Not your unit this turn.");return;}
+  if(PHASES[phaseIdx]!=="Movement"){return;}
+  if(u.moved){updateHint(`${u.name} already moved.`);return;}
+  // default model line: horizontal, centred on the clicked point, sized to the cluster footprint
+  const span=Math.max(1,(u.models-1))*(baseRadiusInch(u)*2/HEX_INCH);
+  const ax=hx-span/2, bx=hx+span/2, ay=hy, by=hy;
+  action={kind:'moveStage', u, hx, hy, ax, ay, bx, by};
+  evaluateMoveStage();
+  selId=u.id; showActionPanel(true); renderAction(); render();
+}
+// Compute whether the staged move is legal (distance within Move/Advance, path clear, not ending in ER).
+function evaluateMoveStage(){
+  const a=action; if(!a||a.kind!=='moveStage')return;
+  const u=a.u;
+  const dStraight=Math.hypot(u.hx-a.hx,u.hy-a.hy)*HEX_INCH;
+  if(isAircraft(u)){
+    a.dInch=dStraight;
+    a.legal = dStraight>=AIRCRAFT_MIN_MOVE && (u.facing==null||withinArc(u,a.hx,a.hy,90)) && !segBlocked(u.hx,u.hy,a.hx,a.hy)
+              && !units.some(e=>!e.dead&&e.player!==u.player&&Math.hypot(e.hx-a.hx,e.hy-a.hy)*HEX_INCH<=ENGAGE_IN);
+    a.kindOfMove='Aircraft pass';
+    return;
+  }
+  const eM=u.m+(u._bfMove||0)+(u._orderMove||0);
+  const d=pathInches(u.hx,u.hy,a.hx,a.hy,eM+6);
+  a.dInch=d;
+  const wouldER=units.some(e=>!e.dead&&e.player!==u.player&&Math.hypot(e.hx-a.hx,e.hy-a.hy)*HEX_INCH<=ENGAGE_IN&&!segBlocked(e.hx,e.hy,a.hx,a.hy));
+  const startER=inER(u);
+  if(!isFinite(d)){a.legal=false;a.kindOfMove='No path';}
+  else if(startER){ a.legal=(d<=eM&&!wouldER); a.kindOfMove='Fall Back'; }
+  else if(d<=eM&&!wouldER){ a.legal=true; a.kindOfMove='Normal move'; }
+  else if(d<=eM+6&&!wouldER){ a.legal=true; a.kindOfMove='Advance (needs D6)'; a.needsAdvance=true; }
+  else { a.legal=false; a.kindOfMove=wouldER?'Ends in Engagement Range':'Too far'; }
+}
+// Rotate/resize the staged model line so the player can orient the formation before confirming.
+function setMoveLine(ax,ay,bx,by){ const a=action; if(!a||a.kind!=='moveStage')return; a.ax=ax;a.ay=ay;a.bx=bx;a.by=by; render(); }
+function confirmMoveStage(){
+  const a=action; if(!a||a.kind!=='moveStage')return;
+  evaluateMoveStage();
+  if(!a.legal){updateHint(`Cannot move there — ${a.kindOfMove}.`);return;}
+  if(a.needsAdvance){ // hand off to the existing Advance roll, preserving destination
+    action={kind:'advance',u:a.u,hx:a.hx,hy:a.hy,need:a.dInch,line:{ax:a.ax,ay:a.ay,bx:a.bx,by:a.by}};
+    showActionPanel(true);renderAction();return;
+  }
+  commitStagedMove(a.u,a.hx,a.hy,a,a.kindOfMove);
+}
+// Commit a staged move: place the model line, set flags/facing, log. Shared by Normal/Fall Back commits.
+function commitStagedMove(u,hx,hy,a,label){
+  const _fx=u.hx,_fy=u.hy;
+  placeModelsLine(u,a.ax,a.ay,a.bx,a.by);
+  u.moved=true; if(/Fall Back/.test(label))u.fellback=true;
+  setFacingFromMove(u,_fx,_fy,hx,hy);
+  if(u.fellback&&u.bshock){const r=d6();if(r<=2){u.models=Math.max(0,u.models-1);log("kill","&nbsp;&nbsp;Desperate Escape: 1 model lost.");}}
+  log("sys",`${u.name} — ${label} ${(a.dInch||0).toFixed(1)}″.`);
+  action=null;showActionPanel(false);render();renderAll();updateHint();
+}
 function tryMove(u,hx,hy){
   if(u.player!==turn){updateHint("Not your unit this turn.");return;}
   if(PHASES[phaseIdx]!=="Movement"){updateHint("Only during Movement.");return;}
@@ -2286,7 +2347,10 @@ function tryMove(u,hx,hy){
 function rollAdvance(){
   const a=action;const adv=d6();const tot=a.u.m+(a.u._bfMove||0)+(a.u._orderMove||0)+adv;
   log("",`${a.u.name} Advance: rolled <b>${adv}</b> → ${tot}″ move.`);logDice([{v:adv}]);
-  if(a.need<=tot){const _fx=a.u.hx,_fy=a.u.hy;a.u.hx=a.hx;a.u.hy=a.hy;a.u.moved=true;a.u.advanced=true;syncModelPos(a.u);setFacingFromMove(a.u,_fx,_fy,a.hx,a.hy);
+  if(a.need<=tot){const _fx=a.u.hx,_fy=a.u.hy;
+    if(a.line)placeModelsLine(a.u,a.line.ax,a.line.ay,a.line.bx,a.line.by);
+    else{a.u.hx=a.hx;a.u.hy=a.hy;syncModelPos(a.u);}
+    a.u.moved=true;a.u.advanced=true;setFacingFromMove(a.u,_fx,_fy,a.hx,a.hy);
     log("sys",`&nbsp;&nbsp;Reached destination (${a.need.toFixed(1)}″). No shooting (non-Assault) or charging.`);}
   else log("miss",`&nbsp;&nbsp;Advance fell short of ${a.need.toFixed(1)}″ — ${a.u.name} stays put.`);
   action=null;showActionPanel(false);render();renderAll();updateHint();
@@ -2810,6 +2874,27 @@ function baseRadiusInch(u){
 /* Translucent preview at the hovered cell for the selected movable unit, plus a heading arrow from the unit
    toward the cursor (showing the direction it would face after moving). Pure render; reads hoverHx/hoverHy. */
 function drawMovePreview(){
+  // Staged move plan: draw the proposed model line as translucent ghosts (green=legal, red=illegal).
+  if(action&&action.kind==='moveStage'){
+    const a=action,u=a.u; const n=Math.max(1,u.models|0);
+    const rPx=Math.max(4,(baseRadiusInch(u)/HEX_INCH)*CELL);
+    const ok=a.legal;
+    // travel line from current anchor to destination
+    const from=cellCenter(u.hx,u.hy), to=cellCenter(a.hx,a.hy);
+    ctx.beginPath();ctx.moveTo(from.x,from.y);ctx.lineTo(to.x,to.y);
+    ctx.strokeStyle=ok?'rgba(155,211,74,.6)':'rgba(184,52,42,.6)';ctx.setLineDash([5,4]);ctx.lineWidth=1.5;ctx.stroke();ctx.setLineDash([]);
+    // ghost models along the staged line
+    ctx.globalAlpha=0.5;
+    for(let i=0;i<n;i++){const t=n===1?0:i/(n-1);
+      const gx=a.ax+(a.bx-a.ax)*t, gy=a.ay+(a.by-a.ay)*t; const c=cellCenter(gx,gy);
+      ctx.beginPath();ctx.arc(c.x,c.y,rPx,0,7);ctx.fillStyle=ok?(u.player===1?gc('--imp'):gc('--cha')):'rgba(120,40,34,.8)';ctx.fill();
+      ctx.lineWidth=1.4;ctx.strokeStyle=ok?gc('--gold2'):gc('--blood2');ctx.stroke();}
+    ctx.globalAlpha=1;
+    const lc=cellCenter((a.ax+a.bx)/2,(a.ay+a.by)/2);
+    ctx.fillStyle=ok?'#cfe':'#f9c';ctx.font='10px Share Tech Mono';ctx.textAlign='center';
+    ctx.fillText(`${(a.dInch||0).toFixed(0)}″ ${a.kindOfMove}`,lc.x,lc.y-rPx-4);
+    return;
+  }
   const sel=units.find(u=>u.id===selId);
   if(!sel||sel.dead||sel.player!==turn||deploying||placingTerrain||action)return;
   if(PHASES[phaseIdx]!=="Movement"||sel.moved)return;
@@ -3625,6 +3710,18 @@ function detachUsesSaga(det){
 function renderAction(){
   const host=$('actionBody');if(!host||!action)return;
   const a=action;let h='';
+  if(a.kind==='moveStage'){
+    const okClr=a.legal?'#9bd34a':'#b8342a';
+    h=`<div class="apTitle">MOVE — ${a.u.name}</div>
+       <p class="apNote">Click a destination on the board to position the unit. Drag-set the formation line, then confirm.</p>
+       <div class="apSub">Proposed: <b style="color:${okClr}">${a.kindOfMove}</b> · ${(a.dInch||0).toFixed(1)}″ ${a.legal?'✓':'✗'}</div>`;
+    if(a.legal)h+=`<button class="btn primary apRoll" id="apConfirmMoveBtn">✓ Confirm move</button>`;
+    h+=`<button class="btn apCancel" id="apCancelBtn">Cancel</button>`;
+    host.innerHTML=h;
+    const cmb=$('apConfirmMoveBtn');if(cmb)cmb.onclick=()=>confirmMoveStage();
+    const cb=$('apCancelBtn');if(cb)cb.onclick=()=>{action=null;showActionPanel(false);renderAll();render();updateHint();};
+    return;
+  }
   if(a.kind==='advance'){
     h=`<div class="apTitle">ADVANCE — ${a.u.name}</div>
        <p class="apNote">Needs ${a.need.toFixed(1)}″ (Move ${a.u.m}″ + D6). Roll the die.</p>
@@ -3826,7 +3923,10 @@ function boardClick(e){
     renderAll();render();return;
   }
   const sel=units.find(u=>u.id===selId);
-  if(sel&&PHASES[phaseIdx]==="Movement"&&!action)tryMove(sel,hx,hy);
+  if(sel&&PHASES[phaseIdx]==="Movement"&&!sel.moved&&(!action||action.kind==='moveStage')){
+    if(sel.player!==turn){updateHint("Not your unit this turn.");return;}
+    beginMoveStage(sel,fx,fy);   // float-precise destination from the click
+  }
 }
 function startBattle(){
   if(mode==='sandbox'){

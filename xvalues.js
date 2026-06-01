@@ -928,6 +928,17 @@ const X_VALUES = {
     we_chaos_spawn: null,
     we_eightbound: null,
     we_lord_invocatus: null,
+  },
+
+  /* BASE SIZES (mm) — NOT in the Wahapedia CSV export (the diameter shown on the webpage as "(⌀ x mm)" is
+     rendered into HTML but omitted from the downloadable data; confirmed by a full scan of every model-row
+     field finding zero base sizes). The renderer falls back to a per-keyword default (baseRadiusInch in
+     app.js): 32mm infantry, 40mm terminators/bikes, larger for vehicles/monsters/titanic. Fill exact values
+     here, keyed by datasheet_id, to override the default for specific units. Value = base DIAMETER in mm
+     (largest dimension for ovals). Example: sm_terminator_squad: 40, ork_gorkanaut: 170.
+     This table SURVIVES a re-fetch (separate file), like the other X overrides. */
+  baseSizes: {
+    // (empty by default — keyword defaults apply; add exact diameters as desired)
   }
 };
 

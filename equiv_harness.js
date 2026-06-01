@@ -725,7 +725,8 @@ const SCENARIOS = {
     var e2=newUnit('foe',2);e2.deployed=true;e2.hx=16;e2.hy=20;syncModelPos(e2);units.push(e2);
     var b1=e1.models,b2=e2.models;
     beginFightSelection(u); var staged=(action&&action.kind==='fight');
-    if(staged)confirmFight();
+    if(staged)confirmFight();                 // now stages a pending dice roll instead of resolving instantly
+    if(_pendingRoll)_pendingRoll.onRoll();    // simulate the player clicking the dice to roll
     var foughtAndCleared=(u.fought===true&&action===null);
     var someFoeHit=(e1.dead||e1.models<b1||e2.dead||e2.models<b2);
     Math.random=_save;

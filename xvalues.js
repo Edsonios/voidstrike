@@ -939,6 +939,26 @@ const X_VALUES = {
      This table SURVIVES a re-fetch (separate file), like the other X overrides. */
   baseSizes: {
     // (empty by default — keyword defaults apply; add exact diameters as desired)
+  },
+
+  /* MODEL COUNTS (default squad size) — the Wahapedia CSV's unit_composition parsing is imperfect, so many
+     multi-model units import as models:1 until a re-fetch with the improved parser. This override (keyed by
+     datasheet_id, value = default number of models) corrects squad sizes immediately and survives re-fetch.
+     Seeded with common 10e Battleline/troop sizes; extend as needed. applyXValues stamps these onto
+     template.models (and maxModels) so the per-model renderer shows the right number of bases. */
+  modelCounts: {
+    nec_necron_warriors: 10,
+    nec_warriors: 10,
+    aeldari_kabalite_warriors: 10, drukhari_kabalite_warriors: 10,
+    sm_intercessor_squad: 5, sm_assault_intercessor_squad: 5, sm_heavy_intercessor_squad: 5,
+    tyr_termagants: 10, tyr_hormagaunts: 10, tyr_gants: 10,
+    ork_boyz: 10, ork_boys: 10,
+    cd_cultist_mob: 10, csm_cultist_mob: 10, ts_cultist_mob: 10, we_cultist_mob: 10, dg_cultist_mob: 10,
+    ae_guardian_defenders: 10, aeldari_guardian_defenders: 10,
+    lgekc_hearthkyn_warriors: 10, kyn_hearthkyn_warriors: 10,
+    ig_cadian_shock_troops: 10, am_cadian_shock_troops: 10, ig_guardsmen: 10,
+    tau_fire_warriors: 10, tau_strike_team: 10, tau_breacher_team: 10,
+    // (add/adjust by datasheet_id as needed; a re-fetch with the new parser also fixes these at source)
   }
 };
 

@@ -761,3 +761,19 @@ Combat is now legible. `resolveAttacks` already built per-step dice arrays (hitD
 Resolution logic is untouched — the dice were always rolled; this only captures and presents them — so the 29 oracle scenarios stay green. Verified: an attack records one structured event with correct per-step dice counts (15 hit / 9 wound / 6 save for 3A×5 models) and result summary; FNP rolls are captured (6 dice in a FNP test); a 150-step game logged 28 events with no errors.
 
 THIS COMPLETES THE UI/RENDERING REBUILD BATCH: free placement + per-model rendering, real-base-size handling (override table), per-phase setup->confirm interaction (Movement/Shooting/Charge/Fight), smooth movement animation, and the dice panel + event-log rework. (Muster-screen composition/wargear fix remains the one outstanding sub-item from the original list.) Next major phase: AI + Mass-Sim.
+
+
+### Muster fix + dice-under-board + click-to-roll + log cleanup (BUILD 5)
+Four fixes addressing the user's follow-up report:
+
+1. **Units rendered as a single blob** — ROOT CAUSE was data, not rendering: the importer's unit_composition parser only handled an "N-M" range, so 1647/1714 templates imported as models:1 (Necron Warriors, Termagants, Kabalite Warriors, etc.). Fixed two ways: (a) a robust `parseModelCount` that handles flat counts ("10 Necron Warriors"), ranges ("5-10" -> min size), multi-clause ("1 Sergeant and 9 Marines" -> 10), and prose — unit-tested against 12 formats — which corrects it at the source ON RE-FETCH; (b) a `modelCounts` override table in xvalues.js (keyed by datasheet_id, survives re-fetch, seeded with common squads) so it works IMMEDIATELY without a re-fetch. `applyXValues` stamps it onto template.models/maxModels. Verified Necron Warriors now renders 10 distinct discs. (Like base sizes, the raw unit_composition isn't in the export, so a one-time composition diagnostic now logs the real strings for future tuning.)
+
+2. **Muster wargear** — added `wargearSummary(t)` rendering each shop item's parsed loadout (options, or the raw unparsed swap descriptions) as a `.si-wg` line, plus the corrected model count.
+
+3. **Dice tab moved under the board, centered, with click-to-roll** — the dice panel now sits in a centered `.diceUnderBoard` area beneath the canvas (removed from the right column). Combat confirms now call `showPendingRoll(count,label,onRoll)`: the panel shows the right number of pending (unrolled, pulsing) dice, and clicking them runs the resolution. Wired for shooting (hit-dice count), charge (2D6), and fight (melee-attack count). The AI/auto-resolve path bypasses this entirely (calls resolveAttacks directly), so mass-sim is unaffected.
+
+4. **Battle log no longer streams throws** — the inline `logDice`/verbose hit/wound/save lines were removed from resolveAttacks (they had been left in alongside the event system). Dice now live ONLY in the dice panel + the clickable event; the per-throw "show dice in log too" toggle defaults OFF.
+
+BUILD bumped to 5 (the model-count parser changed the importer; header shows "build v5"). Verified: pending-roll resolves correctly when not in ER (15 dice for 3A×5, click -> damage + event), an in-ER unit correctly fires only Pistols, a 150-step auto-resolve game runs clean, 29 scenarios green (fight_cluster updated to drive the pending roll).
+
+TO FULLY FIX MODEL COUNTS AT SOURCE: re-fetch with build v5 (the new parser runs at import); meanwhile the xvalues modelCounts override already corrects seeded squads. ONE prior sub-item (per-model wargear actually consumed during play, vs just displayed) remains future work. Next major phase: AI + Mass-Sim.

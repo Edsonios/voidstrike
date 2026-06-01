@@ -170,6 +170,14 @@ h2 .num{font-family:'Share Tech Mono';color:var(--goldd);font-size:.74rem}
 .die.s6{border-color:var(--gold);color:var(--gold2);box-shadow:0 0 9px rgba(212,175,55,.45)}
 .die.s1{border-color:var(--blood);color:var(--blood2)}.die.ok{border-color:var(--acid);color:var(--acid)}.die.bad{opacity:.42}
 .dicePanel{border:1px solid var(--line2);border-radius:6px;background:var(--void2);padding:10px;min-height:54px;margin-bottom:8px}
+.diceUnderBoard{max-width:700px;width:100%;margin:10px auto 0;text-align:center}
+.diceUBhead{font-family:'Barlow Condensed';font-weight:600;letter-spacing:2px;font-size:.8rem;color:var(--gold2);text-transform:uppercase;margin-bottom:5px}
+.diceUnderBoard .dicePanel{margin-bottom:0}
+.diceUnderBoard .diceRow{justify-content:center}
+.die.pending{cursor:pointer;border-style:dashed;border-color:var(--gold);color:var(--gold2);animation:pulse 1.1s ease-in-out infinite}
+.die.pending:hover{background:var(--panel2);box-shadow:0 0 10px rgba(212,175,55,.5)}
+@keyframes pulse{0%,100%{opacity:.6}50%{opacity:1}}
+.si-wg{display:block;font-family:'Share Tech Mono';font-size:.62rem;color:var(--gold2);opacity:.82;margin-top:2px}
 .diceEmpty{color:var(--ash);font-size:.8rem;font-style:italic;opacity:.7}
 .diceRow{display:flex;align-items:center;gap:8px;margin:4px 0;flex-wrap:wrap}
 .diceLabel{font-family:'Barlow Condensed';font-weight:600;letter-spacing:1px;text-transform:uppercase;font-size:.72rem;width:64px;flex-shrink:0;color:var(--ash)}
@@ -381,6 +389,10 @@ h2 .num{font-family:'Share Tech Mono';color:var(--goldd);font-size:.74rem}
           <button class="toolBtn" data-tool="erase">Erase</button>
         </div>
         <div class="boardframe"><canvas id="board" width="700" height="640"></canvas></div>
+        <div class="diceUnderBoard">
+          <div class="diceUBhead">DICE</div>
+          <div class="dicePanel" id="dicePanel"><div class="diceEmpty">Throws appear here. Click pending dice to roll them; click a log event to review its dice.</div></div>
+        </div>
         <div class="boardlegend" id="legend"></div>
         <div class="btnrow" style="max-width:700px;width:100%"><button class="btn danger" id="resetBtn">↺ New Battle</button></div>
       </div>
@@ -390,12 +402,10 @@ h2 .num{font-family:'Share Tech Mono';color:var(--goldd);font-size:.74rem}
         <div class="scard p1"><div class="nm" id="sb1">Player 1</div><div class="vp" id="vp1">0<small> VP</small></div><div class="cp">CP <span id="cp1">0</span> · <span id="pts1">0</span>pts</div></div>
         <div class="scard p2"><div class="nm" id="sb2">Player 2</div><div class="vp" id="vp2">0<small> VP</small></div><div class="cp">CP <span id="cp2">0</span> · <span id="pts2">0</span>pts</div></div>
       </div>
-      <h2><span class="num">[III]</span> Dice</h2>
-      <div class="dicePanel" id="dicePanel"><div class="diceEmpty">Resolved throws appear here. Click a log event to review its dice.</div></div>
-      <h2><span class="num">[IV]</span> Battle Log</h2>
+      <h2><span class="num">[III]</span> Battle Log</h2>
       <div class="log" id="log"></div>
-      <label class="toggle"><input type="checkbox" id="dieToggle" checked> show dice in log too</label>
-      <h2><span class="num">[V]</span> Selected Unit</h2>
+      <label class="toggle"><input type="checkbox" id="dieToggle"> show dice in log too</label>
+      <h2><span class="num">[IV]</span> Selected Unit</h2>
       <div id="detail" class="detail">No unit selected.</div>
     </div>
   </div>

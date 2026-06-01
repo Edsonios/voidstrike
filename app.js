@@ -83,7 +83,7 @@ function refreshPlayerNames(){
 const PHASES=["Command","Movement","Shooting","Charge","Fight"];
 const HEX_INCH=1;          // simulation resolution: 1 cell = 1 inch (finer grid; was 2)
 const _RES=2/HEX_INCH;     // resolution factor vs the original 2"/cell board — cell-based constants scale by this
-const BUILD=4;   // v4 = base-size column AUTO-DETECT (scans all model-row fields) + fetch-log of model columns. v3 added baseMm/deadlyDemise. Shown in admin status to expose stale deploys.
+const BUILD=5;   // v5 = robust unit_composition model-count parser (+composition diagnostic) & modelCounts override. v4 base-size auto-detect. Shown in admin status to expose stale deploys.
 let CELL=28, GW=Math.round(24*_RES), GH=Math.round(22*_RES);
 let hoverHx=-1, hoverHy=-1;   // current mouse-hover cell (for move-preview + facing-toward-cursor render)
 let customW=24, customH=22;
@@ -791,11 +791,12 @@ function clearStoredData(){try{localStorage.removeItem(LS_KEY);}catch(e){}}
    onto the template; null leaves it unknown (engine uses its dormant/default handling and can log a note). */
 function applyXValues(){
   if(typeof X_VALUES==='undefined')return;
-  const fd=X_VALUES.firingDeck||{}, dd=X_VALUES.deadlyDemise||{}, sc=X_VALUES.scouts||{}, bs=X_VALUES.baseSizes||{};
+  const fd=X_VALUES.firingDeck||{}, dd=X_VALUES.deadlyDemise||{}, sc=X_VALUES.scouts||{}, bs=X_VALUES.baseSizes||{}, mc=X_VALUES.modelCounts||{};
   Object.keys(fd).forEach(k=>{const t=TEMPLATES[k];if(t&&fd[k]!=null)t.firingDeck=fd[k];});
   Object.keys(dd).forEach(k=>{const t=TEMPLATES[k];if(t&&dd[k]!=null)t.deadlyDemise=dd[k];});
   Object.keys(sc).forEach(k=>{const t=TEMPLATES[k];if(t&&sc[k]!=null)t.scoutsMove=sc[k];});
   Object.keys(bs).forEach(k=>{const t=TEMPLATES[k];if(t&&bs[k]!=null)t.baseMm=bs[k];});   // exact base diameter (mm) override
+  Object.keys(mc).forEach(k=>{const t=TEMPLATES[k];if(t&&mc[k]!=null){t.models=mc[k];t.maxModels=mc[k];}});   // default squad size override
 }
 function applyBundle(p){
   if(!p||!p.TEMPLATES||!p.FACTIONS)return false;
@@ -1026,6 +1027,29 @@ function buildFromCSV(tables){
   const byDs=arr=>{const m={};(arr||[]).forEach(r=>{(m[r.datasheet_id]=m[r.datasheet_id]||[]).push(r);});return m;};
   // Parse a base size in mm from a string like "32mm", "⌀ 40 mm", "120 x 92mm" (oval -> larger dim), or a
   // model name carrying a "(⌀32mm)" suffix. Returns a number (largest dimension in mm) or 0 if none found.
+  // Parse the DEFAULT starting model count from a Wahapedia unit_composition string. The field varies a lot:
+  //   "1 Necron Warrior" ; "10 Necron Warriors" ; "5-10 Necron Warriors" ; "This unit contains 1 X and 9 Y" ;
+  //   "1 Sergeant\n4 Marines" ; "10-20 models". Strategy: sum the leading integer of each line/clause (so
+  //   "1 Sergeant and 9 Marines" -> 10), but for a single "N-M" range use the MINIMUM legal size (N). Falls
+  //   back to the number of distinct model rows. Logged once per import so the real strings are visible.
+  function parseModelCount(comp, mlist){
+    if(!comp) return (mlist&&mlist.length>1)?mlist.length:1;
+    const txt=String(comp);
+    // split into clauses on newlines, semicolons, commas, and the word "and"
+    const clauses=txt.split(/\n|;|,|\band\b/i).map(c=>c.trim()).filter(Boolean);
+    let total=0, sawAny=false, singleRangeMin=0, singleRangeSeen=false, multiClause=clauses.length>1;
+    clauses.forEach(c=>{
+      const range=c.match(/(\d+)\s*[-\u2013\u2014]\s*(\d+)/);   // "5-10"
+      if(range){ sawAny=true; const lo=toInt(range[1],1);
+        if(!multiClause){singleRangeMin=lo;singleRangeSeen=true;}
+        total+=lo; return; }
+      const lead=c.match(/(\d+)/);                                // leading/!any integer in the clause
+      if(lead){ sawAny=true; total+=toInt(lead[1],1); }
+    });
+    if(singleRangeSeen && !multiClause) return singleRangeMin;     // a lone "N-M" -> minimum unit size
+    if(sawAny && total>0) return total;
+    return (mlist&&mlist.length>1)?mlist.length:1;
+  }
   function parseBaseMm(str){
     if(!str)return 0; const t=String(str);
     // capture all "<n>mm" occurrences (handles "120 x 92mm" and "⌀32mm"); take the max
@@ -1048,7 +1072,7 @@ function buildFromCSV(tables){
     if(ds.virtual==='true')return;
     const mlist=models[ds.id];if(!mlist||!mlist.length)return;
     const lead=mlist[0];
-    if(!_loggedCols){_loggedCols=true; try{console.log('[VOIDSTRIKE] Datasheets_models columns:',Object.keys(lead).join(', ')); console.log('[VOIDSTRIKE] sample model row:',JSON.stringify(lead).slice(0,400));}catch(e){} }
+    if(!_loggedCols){_loggedCols=true; try{console.log('[VOIDSTRIKE] Datasheets_models columns:',Object.keys(lead).join(', ')); console.log('[VOIDSTRIKE] sample model row:',JSON.stringify(lead).slice(0,400)); console.log('[VOIDSTRIKE] sample unit_composition:',JSON.stringify(ds.unit_composition));}catch(e){} }
     const m=toInt(lead.M,6),t=toInt(lead.T,4),sv=svNum(lead.Sv),w=toInt(lead.W,1),
           ld=toInt(lead.Ld,7),oc=toInt(lead.OC,1),inv=lead.inv_sv?svNum(lead.inv_sv):0;
     const allKw=(kws[ds.id]||[]).map(k=>({kw:(k.keyword||k.name||'').toUpperCase(),fac:k.is_faction_keyword==='true'})).filter(k=>k.kw);
@@ -1075,10 +1099,11 @@ function buildFromCSV(tables){
     let pts=0;
     if(costs[ds.id]&&costs[ds.id].length)pts=toInt(costs[ds.id][0].cost,0);
     let modelCount=1;
-    if(ds.unit_composition){const cm=ds.unit_composition.match(/(\d+)\s*[-–]\s*(\d+)/);if(cm)modelCount=toInt(cm[1],1);}
-    else if(mlist.length>1)modelCount=mlist.length;
+    if(ds.unit_composition){
+      modelCount = parseModelCount(ds.unit_composition, mlist);
+    } else if(mlist.length>1) modelCount=mlist.length;
     if(kwList.includes('CHARACTER')||kwList.includes('MONSTER')||kwList.includes('VEHICLE'))modelCount=1;
-    modelCount=clamp(modelCount,1,20);
+    modelCount=clamp(modelCount,1,30);
 
     const key=slug(ds.faction_id+'_'+ds.name)||('ds'+ds.id);
     // Transport capacity: Wahapedia's Datasheets CSV carries a `transport` field describing the capacity.
@@ -1394,6 +1419,28 @@ function renderDetachSelectors(){
   });
 }
 function rosterPts(p){return Object.entries(roster[p]).reduce((s,[k,q])=>s+((TEMPLATES[k]?.pts||0)*q),0);}
+// Build a short readable wargear/loadout summary for a template, for the muster screen. Uses parsed options
+// when available, else the raw unparsed swap descriptions (still informative). Returns '' if none.
+function wargearSummary(t){
+  const lo=t.loadout; if(!lo)return '';
+  const parts=[];
+  if(Array.isArray(lo)){ // legacy array shape
+    lo.forEach(o=>{if(o&&o.raw)parts.push(o.raw);});
+  } else {
+    (lo.options||[]).forEach(o=>{
+      if(o&&o.raw){parts.push(o.raw);return;}
+      if(o&&(o.replace||o.with||o.take)){
+        const r=(o.replace||[]).join(', '), w=(o.with||[]).join(', '), tk=(o.take||[]).join(', ');
+        if(r&&w)parts.push(`${r} → ${w}`); else if(tk)parts.push(`+${tk}`);
+      }
+    });
+    (lo.unparsed||[]).forEach(u=>{if(u)parts.push(String(u));});
+  }
+  if(!parts.length)return '';
+  // condense: first 2 options, trimmed
+  const txt=parts.slice(0,2).map(s=>s.replace(/\s+/g,' ').trim().slice(0,70)).join(' · ');
+  return txt+(parts.length>2?` (+${parts.length-2} more)`:'');
+}
 function rosterModels(p){return Object.entries(roster[p]).reduce((s,[k,q])=>s+((TEMPLATES[k]?.models||1)*q),0);}
 function renderShops(){
   [1,2].forEach(p=>{
@@ -1403,7 +1450,8 @@ function renderShops(){
     list.forEach(k=>{
       const t=TEMPLATES[k];if(!t)return;const q=roster[p][k]||0;
       const it=document.createElement('div');it.className='shopItem'+(q>0?' has':'');
-      it.innerHTML=`<div class="si-name"><b>${t.name}</b><span>${t.models} model${t.models>1?'s':''} · T${t.t} Sv${t.sv}+ W${t.w}${t.inv?` · ${t.inv}++`:''}${t.role?` · ${t.role}`:''}</span></div>
+      const wg=wargearSummary(t);
+      it.innerHTML=`<div class="si-name"><b>${t.name}</b><span>${t.models} model${t.models>1?'s':''} · T${t.t} Sv${t.sv}+ W${t.w}${t.inv?` · ${t.inv}++`:''}${t.role?` · ${t.role}`:''}</span>${wg?`<span class="si-wg">⚙ ${wg}</span>`:''}</div>
         <span class="si-pts">${t.pts}pt</span>
         <div class="qty"><button class="qbtn" data-m="${p}" data-k="${k}" data-d="-1">−</button>
         <span class="qnum">${q}</span><button class="qbtn" data-m="${p}" data-k="${k}" data-d="1">+</button></div>`;
@@ -1896,6 +1944,18 @@ function logDice(arr){
    captures the hit/wound/save/FNP dice for one resolveAttacks call plus a short summary; the log shows the
    summary as a clickable line, and clicking it replays that event's dice in the dice panel. ------------- */
 let _diceEvents=[];
+let _pendingRoll=null;   // {count,label,onRoll}
+// Show N pending (unrolled) dice in the panel; clicking any of them runs onRoll() which resolves the action.
+function showPendingRoll(count,label,onRoll){
+  _pendingRoll={count:Math.max(1,count|0),label,onRoll};
+  const host=$('dicePanel');if(!host)return;
+  const n=Math.min(_pendingRoll.count,60);
+  let h=`<div class="diceHead">${label} — click to roll</div><div class="diceRow">`;
+  for(let i=0;i<n;i++)h+=`<span class="die pending" data-roll="1">?</span>`;
+  h+=`</div>`;
+  host.innerHTML=h;
+  host.querySelectorAll('[data-roll]').forEach(d=>d.onclick=()=>{const f=_pendingRoll&&_pendingRoll.onRoll;_pendingRoll=null;if(f)f();});
+}
 function _dieSpan(r){return `<span class="die${r.v===6&&r.crit?' s6':''}${r.v===1&&r.fail?' s1':''}${r.ok?' ok':''}${r.bad?' bad':''}">${r.v}</span>`;}
 function _renderDicePanel(ev){
   const host=$('dicePanel');if(!host)return;
@@ -1968,9 +2028,7 @@ function resolveAttacks(att,def,weapon,nModels,silent){
       const crit=r>=critHitOn;const ok=(r>=skill||crit)&&r!==1;
       hitDice.push({v:r,crit:true,fail:true,ok});
       if(ok){hits++;if(crit){critHits++;if(ab.lethal)autoWounds++;if(ab.sustained)sustainExtra+=ab.sustained;}}}
-    if(!silent){logDice(hitDice);let m=`&nbsp;&nbsp;Hits: <span class="hit">${hits}</span> (${skill}+)`;
-      if(critHits)m+=` · <span class="crit">${critHits} crit</span>`;if(sustainExtra)m+=` · SUSTAINED +${sustainExtra}`;
-      if(ab.lethal&&autoWounds)m+=` · LETHAL ${autoWounds}`;log("",m);}
+    // (per-throw dice + verbose hit line removed from the log; captured in the clickable dice event instead)
   }
   let woundAttempts=hits+sustainExtra-autoWounds;if(woundAttempts<0)woundAttempts=0;
   // Death Guard Nurgle's Gift: an Afflicted enemy has -1 Toughness vs Death Guard attacks
@@ -1988,9 +2046,7 @@ function resolveAttacks(att,def,weapon,nModels,silent){
     const eff=clamp(r+woundMod,1,6);
     const crit=(r===6)||(eff>=antiOn)||(r>=antiOn);const ok=(eff>=wt||crit)&&r!==1;woundDice.push({v:r,crit:true,fail:true,ok});
     if(ok){wounds++;if(crit&&ab.devastating)devastating++;}}
-  if(!silent){logDice(woundDice);let wm=`&nbsp;&nbsp;Wounds: <span class="wound">${wounds}</span> (${wt}+`;
-    if(woundMod)wm+=`, ${woundMod>0?'+':''}${woundMod}`;if(ab.twinlinked)wm+=`, TL`;wm+=`)`;
-    if(devastating)wm+=` · <span class="crit">DEVASTATING ${devastating}</span>`;log("",wm);}
+  // (wound dice + verbose line removed from the log; captured in the dice event)
   let normalWounds=wounds-devastating;if(normalWounds<0)normalWounds=0;
   let failed=0;const saveDice=[];
   let cover=hasCover(att,def)&&weapon.type==="R";
@@ -2010,8 +2066,7 @@ function resolveAttacks(att,def,weapon,nModels,silent){
     if(useInv)need=invUsed||def.inv;
     else{let mod=apPenalty;if(cover&&!(def.sv<=3&&wAp===0))mod+=1;need=effSv-mod;}
     const saved=(r>=need)&&r!==1;saveDice.push({v:r,fail:true,ok:saved,bad:!saved});if(!saved)failed++;}
-  if(!silent){logDice(saveDice);let sm=`&nbsp;&nbsp;Saves: <span class="save">${normalWounds-failed} saved</span>`;
-    if(cover)sm+=` (cover)`;if(useInv)sm+=` (invuln ${invUsed||def.inv}+)`;log("",sm);}
+  // (save dice + verbose line removed from the log; captured in the dice event)
   let perHit=weapon.d - (mods?mods.reduceIncomingDmg:0);if(perHit<1)perHit=1;
   // [MELTA X]: +X Damage when targeting a unit within half range (ranged only).
   if(ab.melta&&weapon.type==="R"&&dist(att,def)<=weapon.rng/2)perHit+=ab.melta;
@@ -2028,9 +2083,9 @@ function resolveAttacks(att,def,weapon,nModels,silent){
     const result=def.dead?`${def.name} DESTROYED`:(killed>0?`${killed} model${killed>1?'s':''} slain`:(failed+mortal>0?`${failed+mortal} wound${(failed+mortal)>1?'s':''}, none slain`:'no damage'));
     pushDiceEvent({
       title:`${att.name} → ${def.name} · ${weapon.name}`,
-      hitDice:ab.torrent?[]:hitDice, hitNote:ab.torrent?'TORRENT auto-hit':`${hits} hit (${skill}+)`,
-      woundDice, woundNote:`${wounds} wound (${wt}+)`,
-      saveDice, saveNote:`${failed} failed`,
+      hitDice:ab.torrent?[]:hitDice, hitNote:ab.torrent?'TORRENT auto-hit':`${hits} hit (${skill}+)${critHits?` · ${critHits} crit`:''}${sustainExtra?` · SUS+${sustainExtra}`:''}${(ab.lethal&&autoWounds)?` · LETHAL ${autoWounds}`:''}`,
+      woundDice, woundNote:`${wounds} wound (${wt}+)${devastating?` · DEVASTATING ${devastating}`:''}`,
+      saveDice, saveNote:`${failed} failed${cover?' · cover':''}${useInv?` · invuln ${invUsed||def.inv}+`:''}`,
       fnpDice:_fnpCollect.slice(), fnpNote:fnp?`FNP ${fnp}+`:'',
       result
     });
@@ -2437,17 +2492,24 @@ function unstageShot(wIdx){const a=action;if(!a||a.kind!=='shoot')return;a.assig
 function confirmShoot(){
   const a=action;if(!a||a.kind!=='shoot'||!a.assignments.length){updateHint("No shots assigned.");return;}
   const u=a.u;const er=inER(u);
-  // group assignments by target unit, preserving order of first appearance
+  // estimate the number of hit dice to show as pending (sum of A across firing models/weapons)
+  let dice=0;
+  a.assignments.forEach(as=>{const w=u.ranged[as.weapon];if(er&&!w.ab.pistol)return;
+    let per=w.a;if(w.ab.rapidfire){const tgt=units.find(x=>x.id===as.target);if(tgt&&dist(u,tgt)<=w.rng/2)per+=w.ab.rapidfire;}
+    dice+=Math.max(1,per)*u.models;});
+  showPendingRoll(dice, `${u.name} shooting`, ()=>_resolveShoot(a));
+}
+function _resolveShoot(a){
+  const u=a.u;const er=inER(u);
   const order=[];const byTgt={};
   a.assignments.forEach(as=>{const w=u.ranged[as.weapon];
-    if(er&&!w.ab.pistol)return;   // in ER: only Pistols may fire
+    if(er&&!w.ab.pistol)return;
     if(!byTgt[as.target]){byTgt[as.target]=[];order.push(as.target);}
     byTgt[as.target].push(as);});
   order.forEach(tid=>{const tgt=units.find(x=>x.id===tid);if(!tgt)return;
-    // same-profile grouping: sort this target's weapons by name so identical profiles resolve together
     byTgt[tid].sort((p,q)=>u.ranged[p.weapon].name.localeCompare(u.ranged[q.weapon].name));
     byTgt[tid].forEach(as=>{const w=u.ranged[as.weapon];
-      if(tgt.dead)return;            // target may have been destroyed by earlier weapons
+      if(tgt.dead)return;
       resolveAttacks(u,tgt,w,u.models,false);u.shotWith.push(as.weapon);});
   });
   scoreObjectivesLive();
@@ -2479,10 +2541,15 @@ function confirmCharge(){
   const a=action;const u=a.u;if(!a.selected.length){updateHint("Declare at least one charge target.");return;}
   const tgts=a.selected.map(id=>units.find(x=>x.id===id)).filter(t=>t&&!t.dead);
   if(!tgts.length){action=null;showActionPanel(false);render();return;}
+  showPendingRoll(2, `${u.name} charge (2D6)`, ()=>_resolveCharge(a,tgts));
+}
+function _resolveCharge(a,tgts){
+  const u=a.u;
   // 2D6 charge roll; must be enough to reach Engagement Range of EVERY declared target
   const r1=d6(),r2=d6(),roll=r1+r2;
   const need=Math.max.apply(null,tgts.map(t=>Math.max(0,dist(u,t)-ENGAGE_IN)));
-  log("",`${u.name} charges ${tgts.map(t=>t.name).join(', ')}: 2D6 = <b>${roll}″</b> (need ${need.toFixed(1)}″ to reach all)`);logDice([{v:r1},{v:r2}]);
+  log("",`${u.name} charges ${tgts.map(t=>t.name).join(', ')}: 2D6 = <b>${roll}″</b> (need ${need.toFixed(1)}″ to reach all)`);
+  _renderDicePanel({title:`${u.name} charge`, hitDice:[{v:r1,ok:roll>=need},{v:r2,ok:roll>=need}], hitNote:`${roll}″ vs need ${need.toFixed(1)}″`, result:roll>=need?'Charge SUCCESS':'Charge failed'});
   if(roll>=need){
     // move toward the nearest declared target (single-anchor abstraction); Fights First via charged flag
     let nearest=tgts[0],nd=dist(u,tgts[0]);tgts.forEach(t=>{const d=dist(u,t);if(d<nd){nd=d;nearest=t;}});
@@ -2589,21 +2656,19 @@ function fightPickTarget(t){
 function fightPickWeapon(idx){if(action&&action.kind==='fight'){action.weapon=idx;renderAction();render();}}
 function confirmFight(){
   const a=action;const u=a.u;
-  if(u.charged)log("sys",`${u.name} (charged — fights first)`);
   const w=u.melee[a.weapon]||u.melee[0];
-  // 2. Make melee attacks. If the player declared specific targets, split models across them via the engine's
-  //    per-model allocation; else auto-split to all engaged foes. Resolve all attacks vs one target before the
-  //    next (loop order), accounting for mid-sequence deaths.
   let split=meleeTargetSplit(u);
-  if(a.selected.length){
-    const want=new Set(a.selected);
-    const chosen=split.filter(s=>want.has(s.enemy.id));
-    split = chosen.length?chosen:split;   // fall back to auto if declared targets aren't reachable
-  }
-  if(!split.length){ // no reachable foe — still allow consolidate
+  if(a.selected.length){const want=new Set(a.selected);const chosen=split.filter(s=>want.has(s.enemy.id));split=chosen.length?chosen:split;}
+  if(!split.length){ // no reachable foe — still allow consolidate, no dice
     if(!u.dead&&consolidateMove(u))log("",`${u.name} consolidates.`);
     u.fought=true;action=null;showActionPanel(false);render();renderAll();updateHint();return;
   }
+  const dice=split.reduce((s,sp)=>s+Math.max(1,w.a)*sp.nModels,0);
+  showPendingRoll(dice, `${u.name} melee`, ()=>_resolveFight(a,w,split));
+}
+function _resolveFight(a,w,split){
+  const u=a.u;
+  if(u.charged)log("sys",`${u.name} (charged — fights first)`);
   split.forEach(s=>{const tgt=units.find(x=>x.id===s.enemy.id);if(!tgt||tgt.dead)return;
     resolveAttacks(u,tgt,w,s.nModels,false);});
   u.fought=true;

@@ -83,7 +83,7 @@ function refreshPlayerNames(){
 const PHASES=["Command","Movement","Shooting","Charge","Fight"];
 const HEX_INCH=1;          // simulation resolution: 1 cell = 1 inch (finer grid; was 2)
 const _RES=2/HEX_INCH;     // resolution factor vs the original 2"/cell board — cell-based constants scale by this
-const BUILD=5;   // v5 = robust unit_composition model-count parser (+composition diagnostic) & modelCounts override. v4 base-size auto-detect. Shown in admin status to expose stale deploys.
+const BUILD=6;   // v6 = model count from Datasheets_models_cost (systematic source) + cost-row diagnostic. v5 composition prose parser. Shown in admin status to expose stale deploys.
 let CELL=28, GW=Math.round(24*_RES), GH=Math.round(22*_RES);
 let hoverHx=-1, hoverHy=-1;   // current mouse-hover cell (for move-preview + facing-toward-cursor render)
 let customW=24, customH=22;
@@ -1032,22 +1032,34 @@ function buildFromCSV(tables){
   //   "1 Sergeant\n4 Marines" ; "10-20 models". Strategy: sum the leading integer of each line/clause (so
   //   "1 Sergeant and 9 Marines" -> 10), but for a single "N-M" range use the MINIMUM legal size (N). Falls
   //   back to the number of distinct model rows. Logged once per import so the real strings are visible.
-  function parseModelCount(comp, mlist){
-    if(!comp) return (mlist&&mlist.length>1)?mlist.length:1;
-    const txt=String(comp);
-    // split into clauses on newlines, semicolons, commas, and the word "and"
-    const clauses=txt.split(/\n|;|,|\band\b/i).map(c=>c.trim()).filter(Boolean);
-    let total=0, sawAny=false, singleRangeMin=0, singleRangeSeen=false, multiClause=clauses.length>1;
-    clauses.forEach(c=>{
-      const range=c.match(/(\d+)\s*[-\u2013\u2014]\s*(\d+)/);   // "5-10"
-      if(range){ sawAny=true; const lo=toInt(range[1],1);
-        if(!multiClause){singleRangeMin=lo;singleRangeSeen=true;}
-        total+=lo; return; }
-      const lead=c.match(/(\d+)/);                                // leading/!any integer in the clause
-      if(lead){ sawAny=true; total+=toInt(lead[1],1); }
-    });
-    if(singleRangeSeen && !multiClause) return singleRangeMin;     // a lone "N-M" -> minimum unit size
-    if(sawAny && total>0) return total;
+  function parseModelCount(comp, mlist, costRows){
+    // PRIORITY 1: Datasheets_models_cost descriptions reliably encode legal unit sizes as "N model(s)"
+    // (e.g. "5 models" / "10 models"). Take the SMALLEST such count = the default (minimum) unit size.
+    // This is present in the data even when unit_composition prose isn't, so it's the systematic source.
+    if(costRows&&costRows.length){
+      const sizes=[];
+      costRows.forEach(r=>{ // scan ALL fields of the cost row for an "N model(s)" token (column name varies)
+        for(const key in r){const m=String(r[key]).match(/(\d+)\s*model/i); if(m){sizes.push(parseInt(m[1],10));break;}}
+      });
+      if(sizes.length){const mn=Math.min.apply(null,sizes); if(mn>0)return mn;}
+    }
+    // PRIORITY 2: parse the unit_composition prose (flat count / range / multi-clause).
+    if(comp){
+      const txt=String(comp);
+      const clauses=txt.split(/\n|;|,|\band\b/i).map(c=>c.trim()).filter(Boolean);
+      let total=0, sawAny=false, singleRangeMin=0, singleRangeSeen=false, multiClause=clauses.length>1;
+      clauses.forEach(c=>{
+        const range=c.match(/(\d+)\s*[-\u2013\u2014]\s*(\d+)/);
+        if(range){ sawAny=true; const lo=toInt(range[1],1);
+          if(!multiClause){singleRangeMin=lo;singleRangeSeen=true;}
+          total+=lo; return; }
+        const lead=c.match(/(\d+)/);
+        if(lead){ sawAny=true; total+=toInt(lead[1],1); }
+      });
+      if(singleRangeSeen && !multiClause) return singleRangeMin;
+      if(sawAny && total>0) return total;
+    }
+    // PRIORITY 3: number of distinct model rows.
     return (mlist&&mlist.length>1)?mlist.length:1;
   }
   function parseBaseMm(str){
@@ -1072,7 +1084,7 @@ function buildFromCSV(tables){
     if(ds.virtual==='true')return;
     const mlist=models[ds.id];if(!mlist||!mlist.length)return;
     const lead=mlist[0];
-    if(!_loggedCols){_loggedCols=true; try{console.log('[VOIDSTRIKE] Datasheets_models columns:',Object.keys(lead).join(', ')); console.log('[VOIDSTRIKE] sample model row:',JSON.stringify(lead).slice(0,400)); console.log('[VOIDSTRIKE] sample unit_composition:',JSON.stringify(ds.unit_composition));}catch(e){} }
+    if(!_loggedCols){_loggedCols=true; try{console.log('[VOIDSTRIKE] Datasheets_models columns:',Object.keys(lead).join(', ')); console.log('[VOIDSTRIKE] sample model row:',JSON.stringify(lead).slice(0,400)); console.log('[VOIDSTRIKE] sample unit_composition:',JSON.stringify(ds.unit_composition)); console.log('[VOIDSTRIKE] sample cost rows:',JSON.stringify((costs[ds.id]||[]).slice(0,3)));}catch(e){} }
     const m=toInt(lead.M,6),t=toInt(lead.T,4),sv=svNum(lead.Sv),w=toInt(lead.W,1),
           ld=toInt(lead.Ld,7),oc=toInt(lead.OC,1),inv=lead.inv_sv?svNum(lead.inv_sv):0;
     const allKw=(kws[ds.id]||[]).map(k=>({kw:(k.keyword||k.name||'').toUpperCase(),fac:k.is_faction_keyword==='true'})).filter(k=>k.kw);
@@ -1099,9 +1111,8 @@ function buildFromCSV(tables){
     let pts=0;
     if(costs[ds.id]&&costs[ds.id].length)pts=toInt(costs[ds.id][0].cost,0);
     let modelCount=1;
-    if(ds.unit_composition){
-      modelCount = parseModelCount(ds.unit_composition, mlist);
-    } else if(mlist.length>1) modelCount=mlist.length;
+    const costRows=costs[ds.id]||[];
+    modelCount = parseModelCount(ds.unit_composition, mlist, costRows);
     if(kwList.includes('CHARACTER')||kwList.includes('MONSTER')||kwList.includes('VEHICLE'))modelCount=1;
     modelCount=clamp(modelCount,1,30);
 
@@ -1612,6 +1623,30 @@ function placeModelsLine(u,ax,ay,bx,by){
   if(n===1){ out.push({hx:clampf(ax,0,GW-1),hy:clampf(ay,0,GH-1)}); }
   else for(let i=0;i<n;i++){ const t=i/(n-1);
     out.push({hx:clampf(ax+(bx-ax)*t,0,GW-1),hy:clampf(ay+(by-ay)*t,0,GH-1)}); }
+  u.modelPos=out; recenterToken(u);
+  return out;
+}
+// Arrange a unit's models as a compact grid blob CENTRED on (cx,cy). Spacing = base diameter so bases don't
+// overlap. Used by movement staging so a squad lands centred on the cursor (not strung out in a line).
+function placeModelsBlob(u,cx,cy){
+  if(!u||!u.modelPos)syncModelPos(u);
+  const n=Math.max(1,u.models|0);
+  const step=Math.max(0.8, baseRadiusInch(u)*2/HEX_INCH);   // cells between model centres
+  const cols=Math.max(1,Math.ceil(Math.sqrt(n)));
+  const rows=Math.ceil(n/cols);
+  const out=[];
+  for(let i=0;i<n;i++){
+    const r=Math.floor(i/cols), c=i%cols;
+    const colsInRow=(r===rows-1)?(n-cols*(rows-1)):cols;       // centre the (possibly shorter) last row
+    let x=cx+(c-(colsInRow-1)/2)*step;
+    let y=cy+(r-(rows-1)/2)*step;
+    x=clampf(x,0,GW-1); y=clampf(y,0,GH-1);
+    // terrain: don't let a model land across a wall from the unit's centre (it would be visually outside
+    // terrain yet share the anchor's cover/blocking). If the centre->model segment crosses a wall, pull the
+    // model back toward the centre until it's on the same side.
+    if(walls.length){let g=0;while(segBlocked(cx,cy,x,y)&&g++<6){x=cx+(x-cx)*0.5;y=cy+(y-cy)*0.5;}}
+    out.push({hx:x,hy:y});
+  }
   u.modelPos=out; recenterToken(u);
   return out;
 }
@@ -2222,7 +2257,18 @@ function doCommandPhase(){
   const ar=armyRuleOf(turn);
   if(ar&&/reanimation/i.test(ar.name)){
     units.filter(u=>u.player===turn&&!u.dead&&unitHasKw(u,'NECRONS')).forEach(u=>{
-      const n=d3()+necronLeaderBonus(u);reanimateUnit(u,n);});
+      if(totalWounds(u)>=maxWounds(u))return;                   // already at full strength — nothing to heal
+      const roll=d3(), bonus=necronLeaderBonus(u), n=roll+bonus;
+      const before=u.models, beforeW=totalWounds(u);
+      const healed=reanimateUnit(u,n,true);                     // silent: we present via the dice event
+      if(typeof pushDiceEvent==='function'){
+        pushDiceEvent({
+          title:`♻ Reanimation — ${u.name}`,
+          hitDice:[{v:roll,ok:true}], hitNote:`D3${bonus?` +${bonus} (leader)`:''} = ${n}W`,
+          result: healed?`reanimated ${healed}W → ${u.models}/${u.maxModels} models`:'no wounds to restore'
+        });
+      }
+    });
   }
   // Feed the Swarm (Assimilation Swarm): each HARVESTER heals a friendly TYRANIDS unit within 6"
   if(isTyranidArmy(turn)&&/feed the swarm/i.test((detachOf(turn)?.rule?.name)||'')){
@@ -2406,8 +2452,8 @@ function confirmMoveStage(){
 function commitStagedMove(u,hx,hy,a,label){
   const _fx=u.hx,_fy=u.hy;
   const _oldPos=(u.modelPos||[]).map(p=>({hx:p.hx,hy:p.hy}));   // capture for animation
-  placeModelsLine(u,a.ax,a.ay,a.bx,a.by);
-  animateMove(u,_oldPos);                                        // glide models to the new line
+  placeModelsBlob(u,a.hx,a.hy);                                 // centred blob on the destination
+  animateMove(u,_oldPos);                                        // glide models to the new positions
   u.moved=true; if(/Fall Back/.test(label))u.fellback=true;
   setFacingFromMove(u,_fx,_fy,hx,hy);
   if(u.fellback&&u.bshock){const r=d6();if(r<=2){u.models=Math.max(0,u.models-1);log("kill","&nbsp;&nbsp;Desperate Escape: 1 model lost.");}}
@@ -2459,7 +2505,7 @@ function rollAdvance(){
   const a=action;const adv=d6();const tot=a.u.m+(a.u._bfMove||0)+(a.u._orderMove||0)+adv;
   log("",`${a.u.name} Advance: rolled <b>${adv}</b> → ${tot}″ move.`);logDice([{v:adv}]);
   if(a.need<=tot){const _fx=a.u.hx,_fy=a.u.hy;
-    if(a.line)placeModelsLine(a.u,a.line.ax,a.line.ay,a.line.bx,a.line.by);
+    if(a.line)placeModelsBlob(a.u,a.hx,a.hy);
     else{a.u.hx=a.hx;a.u.hy=a.hy;syncModelPos(a.u);}
     a.u.moved=true;a.u.advanced=true;setFacingFromMove(a.u,_fx,_fy,a.hx,a.hy);
     log("sys",`&nbsp;&nbsp;Reached destination (${a.need.toFixed(1)}″). No shooting (non-Assault) or charging.`);}
@@ -3109,14 +3155,19 @@ function drawMovePreview(){
     const from=cellCenter(u.hx,u.hy), to=cellCenter(a.hx,a.hy);
     ctx.beginPath();ctx.moveTo(from.x,from.y);ctx.lineTo(to.x,to.y);
     ctx.strokeStyle=ok?'rgba(155,211,74,.6)':'rgba(184,52,42,.6)';ctx.setLineDash([5,4]);ctx.lineWidth=1.5;ctx.stroke();ctx.setLineDash([]);
-    // ghost models along the staged line
+    // ghost models in the same compact blob layout the commit will use, centred on the destination
     ctx.globalAlpha=0.5;
-    for(let i=0;i<n;i++){const t=n===1?0:i/(n-1);
-      const gx=a.ax+(a.bx-a.ax)*t, gy=a.ay+(a.by-a.ay)*t; const c=cellCenter(gx,gy);
+    const step=Math.max(0.8, baseRadiusInch(u)*2/HEX_INCH);
+    const cols=Math.max(1,Math.ceil(Math.sqrt(n))), rows=Math.ceil(n/cols);
+    for(let i=0;i<n;i++){
+      const r=Math.floor(i/cols), cc=i%cols;
+      const colsInRow=(r===rows-1)?(n-cols*(rows-1)):cols;
+      const gx=a.hx+(cc-(colsInRow-1)/2)*step, gy=a.hy+(r-(rows-1)/2)*step;
+      const c=cellCenter(gx,gy);
       ctx.beginPath();ctx.arc(c.x,c.y,rPx,0,7);ctx.fillStyle=ok?(u.player===1?gc('--imp'):gc('--cha')):'rgba(120,40,34,.8)';ctx.fill();
       ctx.lineWidth=1.4;ctx.strokeStyle=ok?gc('--gold2'):gc('--blood2');ctx.stroke();}
     ctx.globalAlpha=1;
-    const lc=cellCenter((a.ax+a.bx)/2,(a.ay+a.by)/2);
+    const lc=cellCenter(a.hx,a.hy);
     ctx.fillStyle=ok?'#cfe':'#f9c';ctx.font='10px Share Tech Mono';ctx.textAlign='center';
     ctx.fillText(`${(a.dInch||0).toFixed(0)}″ ${a.kindOfMove}`,lc.x,lc.y-rPx-4);
     return;

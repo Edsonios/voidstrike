@@ -777,3 +777,19 @@ Four fixes addressing the user's follow-up report:
 BUILD bumped to 5 (the model-count parser changed the importer; header shows "build v5"). Verified: pending-roll resolves correctly when not in ER (15 dice for 3A×5, click -> damage + event), an in-ER unit correctly fires only Pistols, a 150-step auto-resolve game runs clean, 29 scenarios green (fight_cluster updated to drive the pending roll).
 
 TO FULLY FIX MODEL COUNTS AT SOURCE: re-fetch with build v5 (the new parser runs at import); meanwhile the xvalues modelCounts override already corrects seeded squads. ONE prior sub-item (per-model wargear actually consumed during play, vs just displayed) remains future work. Next major phase: AI + Mass-Sim.
+
+
+### Systematic fixes (BUILD 6): composition root-cause, blob centring/terrain, reanimation dice
+Addressing the user's pushback that several problems were systemic, not one-offs:
+
+1. **Unit composition was wrong for ~327 infantry / 66 battleline units (not just Necron Warriors)** — Immortals, Flayed Ones, Lychguard, Purifier/Strike Squads, etc. ROOT CAUSE: model count was parsed only from the prose unit_composition (often a format the regex missed) and that field isn't even in the export. SYSTEMATIC FIX: `parseModelCount` now reads the **Datasheets_models_cost** table FIRST — those cost lines reliably encode legal unit sizes as "N models" (e.g. "5 models"/"10 models"), and we take the smallest = default unit size. This data is actually present and fixes ALL affected units at once on re-fetch, rather than hand-seeding. The field name is found by scanning all cost-row fields (no guessed column), and a cost-row diagnostic logs the real structure. Prose composition + model-row count remain fallbacks. Unit-tested: Necron Warriors→10, Strike Squad→5, Immortals→5, characters→1. (Needs a re-fetch with build v6 to apply at source; the xvalues modelCounts override still covers seeded squads immediately.)
+
+2. **Blob spawned left of the cursor** — movement staging used a wide horizontal LINE (placeModelsLine). Replaced with `placeModelsBlob(u,cx,cy)`: a compact grid CENTRED on the click. Verified the centroid lands on the cursor and 10 models spread symmetrically (±~2 cells) instead of stringing left. Preview ghosts, commit, and the advance path all use the blob now.
+
+3. **Blobs ignored terrain (rendered outside, un-shootable)** — `placeModelsBlob` now pulls any model back toward the centre if the centre→model segment crosses a wall, so the whole unit stays on one side of terrain and stays coherent with its anchor for shooting/charge/visibility checks. Verified: 0 models land across a wall, blob max-x stops just short of the wall.
+
+4. **Reanimation Protocols rolled invisibly** — it called d3() and only wrote a sys-log line, never appearing in the dice panel built last round. Now each NECRONS unit's end-of-Command heal rolls a visible D3 (+leader bonus) and calls `pushDiceEvent` (♻ title, the die, and the "reanimated NW → models" result), so it shows in the dice section and the clickable event log, like all other rolls. Units already at full strength are skipped.
+
+BUILD bumped to 6. 29 scenarios green throughout.
+
+STILL OUTSTANDING (deliberately deferred as a focused subsystem, not half-built): the muster screen's FUNCTIONAL wargear selection + leader-appointment. The roster is currently {templateKey: quantity} with no per-unit choice state; doing this properly means extending the roster data model, a selection UI, and wiring choices into newUnit + combat resolution. This is the next dedicated task before AI + Mass-Sim.

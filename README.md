@@ -512,3 +512,28 @@ Mechanics encoded:
 Verified by a new oracle scenario (`transports`): capacity respected (5 fits, +8 rejected at cap 10), embarked unit off-board, disembark within 3", Firing Deck grants a shot and locks the passenger out, and a destroyed transport forces the passenger to bail out Battle-shocked. 19 scenarios, all green; 80-step game clean.
 
 **Data note:** capacity and Firing Deck values are now *consumed* correctly; real per-datasheet values arrive when the re-fetched export carries them (the extraction is in place). Per-model weapon selection for Firing Deck is modelled as an effect (extra shots + passenger lockout) rather than exact per-model loadouts, consistent with the per-model-loadout data gap. Next structural systems: Aircraft/Hover, then Deadly Demise (mechanism; magnitude data-dependent).
+
+
+### Firing Deck completed + the unseeable-X override library (xvalues.js)
+Completing Firing Deck surfaced the same data limitation as Deadly Demise: the export carries only the generic glossary text for these abilities (the literal placeholder 'x'), never the per-datasheet number. The re-fetched factions-data.json DOES now carry real `transportCapacity` (verified: Rhino 12, etc., across 178 transports) and the `firingDeck` flag — but not the Firing Deck `x` value, nor Deadly Demise magnitude, nor Scouts distance.
+
+Resolution (two parts):
+1. **Default firingDeck to 2 when present.** The importer now sets `firingDeck:2` for any transport whose abilities mention Firing Deck without a parseable number (2 is the modal 10e value, correct for the large majority). Verified end-to-end against the real export: all 60 Firing Deck transports now have a working value.
+2. **`xvalues.js` — a re-fetch-surviving override library** (new file, loaded before app.js like ability_fx.js). Keyed by datasheet_id → `{firingDeck, deadlyDemise, scouts}`. It ships pre-populated with firingDeck:2 for all 60 Firing Deck transports and `null` placeholders for 721 Deadly Demise + 110 Scouts datasheets. `applyXValues()` runs after every import (both the saved-bundle and CSV paths), stamping real values over the imported templates; a `null` leaves the engine's default/dormant handling in place. Because it is a separate hand-maintained file, manually entered X's are never wiped when a fresh factions-data.json is dropped in — the future workflow you specified.
+
+The file header doubles as the **worklist**: 60 Firing Deck (defaulted), 721 Deadly Demise, 110 Scouts entries to fill in over time. Values accept a number (firingDeck:2, scouts:6) or a dice string for Deadly Demise ('D3','D6'); the engine rolls dice strings. Verified by oracle scenario `xvalues_override` (override beats imported value; a non-null Deadly Demise stamps as 'D3') and an end-to-end real-export load (Chimera firingDeck 2, Rhino capacity 12, 60 transports firingDeck≥2). 20 scenarios green.
+
+DEPLOY NOTE: `xvalues.js` is a NEW file — add it to the repo (GitHub → Add file → Upload files) alongside the changed app.js and index.html (which now loads it).
+
+
+### Wargear options → loadout synthesis (fetch + parser)
+Extended the data pipeline to fetch Wahapedia's **Datasheets_options** table — the wargear-OPTIONS data (free-form legal-swap rules), distinct from Datasheets_wargear (the flat weapon-profile menu the engine already had). Added it to the Netlify whitelist and to both importer fetch-lists.
+
+Each template now carries `loadout:{options:[...],unparsed:[...]}`:
+- **Raw text is attached losslessly** to every datasheet (nothing dropped).
+- A **parser** (`parseLoadoutOptions`) converts the COMMON 10e grammar into structured options — `{ratio:{n,per}|null, who, replace:[], with:[], take:[], raw}` — covering: "N in M models may replace A with B", "For every M models, 1 may replace A with B", "the Sergeant/Exarch/Champion may take/replace …", "this model may replace A with one of B, C", "any model may take B".
+- Phrasings it can't confidently handle (conditional "if this unit contains 10 models…", nested clauses) are **kept verbatim and flagged `unparsed`** — illegal loadouts are never invented.
+
+Verified by a parser unit-test and a pinned oracle scenario (`loadout_parser`): ratio/who/replace/with/take extracted correctly, "one of the following:" prefixes stripped, conditional lines correctly left unparsed. 21 scenarios green.
+
+**IMPORTANT — needs a re-fetch to populate:** the currently-loaded factions-data.json predates this change and has NO options data, so `loadout` is empty for now. To activate: re-fetch (the new whitelist pulls Datasheets_options) and upload the new factions-data.json. Then real parse coverage can be measured and verified under the oracle. DEPLOY: changed files are app.js and netlify/functions/wahapedia.js (plus harness/baseline). The Netlify function change requires a redeploy for the new CSV to be fetchable.

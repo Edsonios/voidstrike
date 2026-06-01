@@ -767,10 +767,22 @@ function loadStoredData(){
 function clearStoredData(){try{localStorage.removeItem(LS_KEY);}catch(e){}}
 
 /* Apply a {TEMPLATES, FACTIONS} bundle into the live globals (shared loader). */
+/* Apply the unseeable-X override library (xvalues.js) over the imported templates. Runs after any import
+   so manually-maintained X's survive a re-fetch. firingDeck: a real number overrides; null keeps the
+   importer's default (2 when present). deadlyDemise/scouts: a real value (number or dice string) is stamped
+   onto the template; null leaves it unknown (engine uses its dormant/default handling and can log a note). */
+function applyXValues(){
+  if(typeof X_VALUES==='undefined')return;
+  const fd=X_VALUES.firingDeck||{}, dd=X_VALUES.deadlyDemise||{}, sc=X_VALUES.scouts||{};
+  Object.keys(fd).forEach(k=>{const t=TEMPLATES[k];if(t&&fd[k]!=null)t.firingDeck=fd[k];});
+  Object.keys(dd).forEach(k=>{const t=TEMPLATES[k];if(t&&dd[k]!=null)t.deadlyDemise=dd[k];});
+  Object.keys(sc).forEach(k=>{const t=TEMPLATES[k];if(t&&sc[k]!=null)t.scoutsMove=sc[k];});
+}
 function applyBundle(p){
   if(!p||!p.TEMPLATES||!p.FACTIONS)return false;
   Object.assign(TEMPLATES,p.TEMPLATES);
   FACTIONS=Object.assign({},FACTIONS,p.FACTIONS);
+  applyXValues();
   dataLoaded=true;
   const ids=Object.keys(p.FACTIONS);
   if(ids.length>=1)pFaction[1]=ids[0];
@@ -838,17 +850,52 @@ function parseWeaponAbilities(desc){
 }
 function slug(s){return s.toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'').slice(0,46);}
 
+/* ---- WARGEAR OPTIONS / LOADOUT PARSER -------------------------------------------------------------
+   Wahapedia's Datasheets_options table holds free-form English describing legal wargear swaps, e.g.
+   "1 in 5 models may replace its boltgun with a flamer", "the Sergeant may take a power fist".
+   We attach the RAW text to every template (lossless), and parse the COMMON structured patterns into a
+   machine-usable loadoutOptions array. Anything we can't confidently parse is kept as raw text and flagged
+   unparsed — we never invent an illegal loadout. Each parsed option:
+   {ratio:{n,per}|null, who:string|null, replace:[names], with:[names], take:[names], raw}. */
+function parseLoadoutOptions(rows){
+  const out={options:[],unparsed:[]};
+  const clean=s=>String(s).replace(/^(a|an|its|their|the)\s+/i,'').replace(/^one of(?:\s+the following)?[: ]+/i,'').replace(/[.;]+$/,'').trim();
+  const splitList=s=>String(s).replace(/^one of(?:\s+the following)?[: ]+/i,'').replace(/\bor\b/gi,',').split(',').map(clean).filter(Boolean);
+  (rows||[]).forEach(r=>{
+    const raw=stripHtml(r.description||r.button||r.line||'').trim();
+    if(!raw)return;
+    const text=raw.replace(/\u2019/g,"'");
+    let m, parsed=null;
+    if((m=text.match(/(\d+)\s+in\s+(\d+)\s+models?\s+may\s+(?:be\s+)?(?:equipped\s+with|replace[d]?)\s+(?:its?\s+)?(.+?)\s+with\s+(.+?)[.;]?$/i))){
+      parsed={ratio:{n:+m[1],per:+m[2]},who:null,replace:[clean(m[3])],with:splitList(m[4]),take:[],raw};
+    } else if((m=text.match(/for\s+every\s+(\d+)\s+models?(?:\s+in\s+this\s+unit)?[, ]+(?:up to\s+)?(\d+)\s+models?\s+may\s+(?:replace|be equipped with)\s+(?:its?\s+)?(.+?)\s+with\s+(.+?)[.;]?$/i))){
+      parsed={ratio:{n:+m[2],per:+m[1]},who:null,replace:[clean(m[3])],with:splitList(m[4]),take:[],raw};
+    } else if((m=text.match(/(?:the\s+)?([A-Z][\w' -]*?(?:Sergeant|Champion|Leader|Exarch|Nob|Boss|Pack Leader|Aspirant|Superior))\s+may\s+(?:be\s+equipped\s+with|take)\s+(.+?)[.;]?$/i))){
+      parsed={ratio:null,who:clean(m[1]),replace:[],with:[],take:splitList(m[2]),raw};
+    } else if((m=text.match(/(?:the\s+)?([A-Z][\w' -]*?(?:Sergeant|Champion|Leader|Exarch|Nob|Boss|Superior))\s+may\s+replace\s+(?:its?\s+)?(.+?)\s+with\s+(.+?)[.;]?$/i))){
+      parsed={ratio:null,who:clean(m[1]),replace:[clean(m[2])],with:splitList(m[3]),take:[],raw};
+    } else if((m=text.match(/(?:this model|each model|any model|the bearer)\s+may\s+replace\s+(?:its?\s+)?(.+?)\s+with\s+(?:one of[: ]+)?(.+?)[.;]?$/i))){
+      parsed={ratio:null,who:'model',replace:[clean(m[1])],with:splitList(m[2]),take:[],raw};
+    } else if((m=text.match(/(?:this model|each model|any model|the bearer)\s+may\s+(?:take|be equipped with)\s+(.+?)[.;]?$/i))){
+      parsed={ratio:null,who:'model',replace:[],with:[],take:splitList(m[1]),raw};
+    }
+    if(parsed)out.options.push(parsed); else out.unparsed.push(raw);
+  });
+  return out;
+}
+
 /* Build TEMPLATES + FACTIONS from parsed CSV tables (incl. abilities). */
 function buildFromCSV(tables){
   const {Factions,Datasheets,Datasheets_models,Datasheets_wargear,Datasheets_models_cost,
-         Datasheets_keywords,Datasheets_abilities,Abilities}=tables;
+         Datasheets_keywords,Datasheets_abilities,Datasheets_options,Abilities}=tables;
   if(!Factions||!Datasheets||!Datasheets_models||!Datasheets_wargear)
     throw new Error("Need at least Factions, Datasheets, Datasheets_models, Datasheets_wargear.");
   const facName={};Factions.forEach(f=>facName[f.id]=f.name);
   const abilityById={};(Abilities||[]).forEach(a=>abilityById[a.id]={name:a.name,desc:stripHtml(a.description||a.legend||''),type:'Core'});
   const byDs=arr=>{const m={};(arr||[]).forEach(r=>{(m[r.datasheet_id]=m[r.datasheet_id]||[]).push(r);});return m;};
   const models=byDs(Datasheets_models), wargear=byDs(Datasheets_wargear),
-        costs=byDs(Datasheets_models_cost), kws=byDs(Datasheets_keywords), dsAb=byDs(Datasheets_abilities);
+        costs=byDs(Datasheets_models_cost), kws=byDs(Datasheets_keywords), dsAb=byDs(Datasheets_abilities),
+        opts=byDs(Datasheets_options);
 
   const newTpl={}, facUnits={};
   Datasheets.forEach(ds=>{
@@ -891,18 +938,27 @@ function buildFromCSV(tables){
     // Parse the leading model count from it (e.g. "This model has a transport capacity of 12 ... models").
     let capacity=0;
     if(ds.transport){const cm=String(ds.transport).match(/(\d+)/);if(cm)capacity=toInt(cm[1],0);}
-    // Firing Deck x: an ability of the form "Firing Deck N" — pull N from the captured abilities.
+    // Firing Deck x: the export carries only the generic glossary text (placeholder 'x'), so a number
+    // rarely parses. If the ability is PRESENT, default to 2 (the modal 10e value); xvalues.js can override.
     let firingDeck=0;
-    abilities.forEach(a=>{const fm=String(a.name+' '+(a.desc||'')).match(/firing deck\s*'?(\d+)'?/i);if(fm)firingDeck=Math.max(firingDeck,toInt(fm[1],0));});
+    abilities.forEach(a=>{
+      const blob=String(a.name+' '+(a.desc||''));
+      if(/firing deck/i.test(blob)){
+        const fm=blob.match(/firing deck\s*['\u2018\u2019]?(\d+)/i);
+        firingDeck=Math.max(firingDeck, fm?toInt(fm[1],2):2);   // present-but-unnumbered -> default 2
+      }
+    });
     newTpl[key]={name:ds.name,kw:kwList.length?kwList:["INFANTRY"],factionKw,allKw:allKwUpper,pts:pts||0,role:ds.role||'',
       m,t,sv,inv,w,ld,oc,models:modelCount,
       ranged,melee:melee.length?melee:[W("Close combat weapon","M",0,1,4,t,0,1)],
       abilities,
-      transportCapacity:capacity, firingDeck:firingDeck};
+      transportCapacity:capacity, firingDeck:firingDeck,
+      loadout:parseLoadoutOptions(opts[ds.id])};
     (facUnits[ds.faction_id]=facUnits[ds.faction_id]||[]).push(key);
   });
 
   Object.assign(TEMPLATES,newTpl);
+  applyXValues();
   const newFactions={};
   Object.keys(facUnits).forEach(fid=>{
     facUnits[fid].sort((a,b)=>{
@@ -1063,7 +1119,7 @@ async function fetchAllFactions(refresh){
   const startIdx=+($('proxySel').value);
   const base=$('baseUrl').value.trim().replace(/\/?$/,'/');
   const files=['Factions','Datasheets','Datasheets_models','Datasheets_wargear',
-               'Datasheets_models_cost','Datasheets_keywords','Datasheets_abilities','Abilities'];
+               'Datasheets_models_cost','Datasheets_keywords','Datasheets_abilities','Datasheets_options','Abilities'];
   const tables={};
   dpLog('dpLog',refresh?'Re-fetching latest data…':'Fetching CSVs (Netlify function → proxies)…','info');
   for(const f of files){
@@ -1086,7 +1142,7 @@ async function fetchAllFactions(refresh){
 function loadFromFiles(fileList){
   clearDpLog('dpLogFile');
   const tables={};let pending=fileList.length;if(!pending)return;
-  const names=['Factions','Datasheets','Datasheets_models','Datasheets_wargear','Datasheets_models_cost','Datasheets_keywords','Datasheets_abilities','Abilities'];
+  const names=['Factions','Datasheets','Datasheets_models','Datasheets_wargear','Datasheets_models_cost','Datasheets_keywords','Datasheets_abilities','Datasheets_options','Abilities'];
   Array.from(fileList).forEach(file=>{
     const rdr=new FileReader();
     rdr.onload=()=>{

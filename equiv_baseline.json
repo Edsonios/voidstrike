@@ -259,5 +259,23 @@
       "bailedOut": true,
       "bshockApplied": true
     }
+  },
+  "xvalues_override": {
+    "ok": true,
+    "result": {
+      "hasXValues": true,
+      "firingDeckApplied": 2,
+      "deadlyDemiseStamped": "D3"
+    }
+  },
+  "loadout_parser": {
+    "ok": true,
+    "result": {
+      "parsedCount": 5,
+      "unparsedCount": 1,
+      "ratioOK": true,
+      "sergeantTakesFist": true,
+      "conditionalUnparsed": true
+    }
   }
 }

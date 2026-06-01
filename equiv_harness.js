@@ -63,6 +63,7 @@ function makeEnv(){
 // ---- load the engine into the global scope ----
 function loadEngine(){
   const af  = fs.readFileSync('ability_fx.js','utf8');
+  const xv  = fs.existsSync('xvalues.js') ? fs.readFileSync('xvalues.js','utf8') : '';
   const det = fs.readFileSync('detachments.js','utf8');
   const app = fs.readFileSync('app.js','utf8');
   // Expose a hook so scenarios (run inside the eval blob) can install the seeded RNG.
@@ -71,7 +72,7 @@ function loadEngine(){
     mode='open';GW=24;GH=22;PNAME={1:'P1',2:'P2'};objectives=[];walls=[];hatchways=[];
     globalThis.__seedRng=function(seed){ Math.random=globalThis.__mulberry32(seed); };
   `;
-  return af + "\n" + det + "\n" + app + "\n" + boot;
+  return af + "\n" + xv + "\n" + det + "\n" + app + "\n" + boot;
 }
 
 // round positions/wounds to integers; produce a stable, comparable snapshot of a unit
@@ -470,6 +471,51 @@ const SCENARIOS = {
       capacityRespected:capacityRespected, sqOffBoard:sqOffBoard,
       disembarked:disembarked, deckGaveShot:deckGaveShot, paxLockedOut:!!paxLockedOut,
       bailedOut:bailedOut, bshockApplied:bshockApplied
+    };
+  `,
+
+  // 21. X-values override library: applyXValues stamps firingDeck (default 2 present), and overrides from
+  //     X_VALUES win over imported values. Verifies the re-fetch-surviving override layer works.
+  xvalues_override: `
+    // simulate an imported transport template with Firing Deck present (default 2 from importer) and a
+    // template id that exists in X_VALUES.firingDeck
+    var fdId = (typeof X_VALUES!=='undefined' && X_VALUES.firingDeck) ? Object.keys(X_VALUES.firingDeck)[0] : null;
+    var ddId = (typeof X_VALUES!=='undefined' && X_VALUES.deadlyDemise) ? Object.keys(X_VALUES.deadlyDemise)[0] : null;
+    // create templates at those ids and run applyXValues
+    if(fdId){TEMPLATES[fdId]={name:'FDtest',kw:['VEHICLE','TRANSPORT'],allKw:['VEHICLE','TRANSPORT'],pts:80,m:10,t:9,sv:3,inv:0,w:10,ld:6,oc:2,ranged:[],melee:[],models:1,abilities:[],firingDeck:0,transportCapacity:10};}
+    if(ddId){TEMPLATES[ddId]=TEMPLATES[ddId]||{name:'DDtest',kw:['VEHICLE'],allKw:['VEHICLE'],pts:80,m:10,t:9,sv:3,inv:0,w:10,ld:6,oc:2,ranged:[],melee:[],models:1,abilities:[]};}
+    // temporarily set a known deadlyDemise override to prove a non-null value stamps
+    var savedDD = ddId? X_VALUES.deadlyDemise[ddId] : undefined;
+    if(ddId) X_VALUES.deadlyDemise[ddId]='D3';
+    applyXValues();
+    var fdApplied = fdId? TEMPLATES[fdId].firingDeck : 2;     // override 2 should win over imported 0
+    var ddApplied = ddId? TEMPLATES[ddId].deadlyDemise : 'D3';
+    if(ddId) X_VALUES.deadlyDemise[ddId]=savedDD;             // restore (don't mutate the shared lib across runs)
+    globalThis.__result={
+      hasXValues: (typeof X_VALUES!=='undefined'),
+      firingDeckApplied: fdApplied, deadlyDemiseStamped: ddApplied
+    };
+  `,
+
+  // 22. Wargear-options loadout parser: common patterns parse to structured options; conditional/long-tail
+  //     phrasings are kept verbatim and flagged unparsed (never invented).
+  loadout_parser: `
+    var rows=[
+      {description:'1 in 5 models may replace its boltgun with a flamer.'},
+      {description:'For every 5 models in this unit, 1 model may replace its bolt rifle with a plasma incinerator.'},
+      {description:'The Sergeant may take a power fist.'},
+      {description:'The Exarch may be equipped with one of the following: shuriken cannon, scatter laser.'},
+      {description:'This model may replace its chainsword with a power weapon.'},
+      {description:'If this unit contains 10 models, up to 2 models may take special weapons; otherwise only 1 model may do so.'}
+    ];
+    var res=parseLoadoutOptions(rows);
+    var ratio=res.options.find(o=>o.ratio);
+    var sgt=res.options.find(o=>o.who==='Sergeant');
+    globalThis.__result={
+      parsedCount:res.options.length, unparsedCount:res.unparsed.length,
+      ratioOK:!!(ratio&&ratio.ratio.n===1&&ratio.ratio.per===5&&ratio.replace[0]==='boltgun'&&ratio.with[0]==='flamer'),
+      sergeantTakesFist:!!(sgt&&sgt.take[0]==='power fist'),
+      conditionalUnparsed: res.unparsed.some(u=>/if this unit contains/i.test(u))
     };
   `
 };

@@ -263,6 +263,71 @@ const SCENARIOS = {
         grantDevastating: mm?mm.grantDevastating:null, grantLethal: mm?mm.grantLethal:null,
         grantSustained: mm?mm.grantSustained:null };
     }
+  `,
+
+  // 13. Blast: +1 attack per 5 models in the target. 2 models * (base 1 + floor(15/5)=3) = 8 attacks.
+  weapon_blast: `
+    __seedRng(1313);
+    TEMPLATES.bl={name:'Blaster',kw:['INFANTRY'],allKw:['INFANTRY'],pts:100,m:6,t:4,sv:4,inv:0,w:1,ld:6,oc:1,ranged:[{name:'frag',type:'R',rng:24,a:1,skill:3,s:5,ap:0,d:1,ab:{blast:true}}],melee:[],models:2,abilities:[]};
+    TEMPLATES.mob={name:'Mob',kw:['INFANTRY'],allKw:['INFANTRY'],pts:90,m:6,t:4,sv:6,inv:0,w:1,ld:6,oc:1,ranged:[],melee:[],models:15,abilities:[]};
+    FACTIONS.fa={name:'FA',units:['bl'],color:'imp'};FACTIONS.fb={name:'FB',units:['mob'],color:'xenos'};
+    pFaction[1]='fa';pFaction[2]='fb';pDetach[1]=null;pDetach[2]=null;turn=1;
+    var a=newUnit('bl',1),t=newUnit('mob',2);a.deployed=t.deployed=true;a.hx=10;a.hy=10;t.hx=12;t.hy=10;
+    units.length=0;units.push(a,t);
+    var res=resolveAttacks(a,t,a.ranged[0],a.models,true);
+    globalThis.__result={attacks:res.attacks};   // expect 2*(1 + floor(15/5)) = 8
+  `,
+
+  // 14. Melta: +X damage at half range vs far. Same seed both times; only damage-per-hit differs.
+  weapon_melta: `
+    TEMPLATES.me={name:'Melta',kw:['INFANTRY'],allKw:['INFANTRY'],pts:100,m:6,t:4,sv:4,inv:0,w:1,ld:2,oc:1,ranged:[{name:'gun',type:'R',rng:24,a:3,skill:2,s:9,ap:-4,d:3,ab:{melta:2}}],melee:[],models:3,abilities:[]};
+    TEMPLATES.tank={name:'Tank',kw:['VEHICLE'],allKw:['VEHICLE'],pts:200,m:10,t:9,sv:3,inv:0,w:30,ld:7,oc:2,ranged:[],melee:[],models:1,abilities:[]};
+    FACTIONS.fa={name:'FA',units:['me'],color:'imp'};FACTIONS.fb={name:'FB',units:['tank'],color:'xenos'};
+    pFaction[1]='fa';pFaction[2]='fb';pDetach[1]=null;pDetach[2]=null;turn=1;
+    var aN=newUnit('me',1),tN=newUnit('tank',2);aN.deployed=tN.deployed=true;aN.hx=10;aN.hy=10;tN.hx=12;tN.hy=10; // 4" = half range
+    units.length=0;units.push(aN,tN);
+    __seedRng(1414);resolveAttacks(aN,tN,aN.ranged[0],aN.models,true);
+    var nearW=__snap(tN).w;
+    var aF=newUnit('me',1),tF=newUnit('tank',2);aF.deployed=tF.deployed=true;aF.hx=2;aF.hy=2;tF.hx=20;tF.hy=18; // far
+    units.length=0;units.push(aF,tF);
+    __seedRng(1414);resolveAttacks(aF,tF,aF.ranged[0],aF.models,true);
+    var farW=__snap(tF).w;
+    globalThis.__result={nearWoundsLeft:nearW, farWoundsLeft:farW, meltaDealtMore:(nearW<farW)};
+  `,
+
+  // 15. Heavy: +1 to Hit when stationary. BS6+ so dice of exactly 5 only hit WITH the bonus — proves +1 fired.
+  weapon_heavy: `
+    TEMPLATES.hv={name:'Heavy',kw:['INFANTRY'],allKw:['INFANTRY'],pts:100,m:6,t:4,sv:4,inv:0,w:1,ld:6,oc:1,ranged:[{name:'cannon',type:'R',rng:36,a:30,skill:6,s:6,ap:-1,d:1,ab:{heavy:true}}],melee:[],models:1,abilities:[]};
+    TEMPLATES.bag={name:'Bag',kw:['INFANTRY'],allKw:['INFANTRY'],pts:90,m:6,t:4,sv:7,inv:0,w:999,ld:6,oc:1,ranged:[],melee:[],models:1,abilities:[]};
+    FACTIONS.fa={name:'FA',units:['hv'],color:'imp'};FACTIONS.fb={name:'FB',units:['bag'],color:'xenos'};
+    pFaction[1]='fa';pFaction[2]='fb';pDetach[1]=null;pDetach[2]=null;turn=1;
+    var aS=newUnit('hv',1),tS=newUnit('bag',2);aS.deployed=tS.deployed=true;aS.hx=10;aS.hy=10;tS.hx=14;tS.hy=10;aS.moved=false;
+    units.length=0;units.push(aS,tS);
+    __seedRng(1515);var rS=resolveAttacks(aS,tS,aS.ranged[0],1,true);
+    var aM=newUnit('hv',1),tM=newUnit('bag',2);aM.deployed=tM.deployed=true;aM.hx=10;aM.hy=10;tM.hx=14;tM.hy=10;aM.moved=true;
+    units.length=0;units.push(aM,tM);
+    __seedRng(1515);var rM=resolveAttacks(aM,tM,aM.ranged[0],1,true);
+    // BS6+ moving hits only on 6; stationary (5+) hits on 5 and 6. With 30 dice, stationary MUST score strictly more.
+    globalThis.__result={stationaryHits:rS.hits, movedHits:rM.hits, heavyStrictlyHelped:(rS.hits>rM.hits)};
+  `,
+
+  // 16. Indirect Fire: no line of sight -> attack still happens at -1 to Hit (and target gains cover).
+  //     Stubs visible() to force each branch deterministically, restores it after.
+  weapon_indirect: `
+    TEMPLATES.ind={name:'Mortar',kw:['INFANTRY'],allKw:['INFANTRY'],pts:100,m:6,t:4,sv:4,inv:0,w:1,ld:6,oc:1,ranged:[{name:'shell',type:'R',rng:48,a:12,skill:3,s:5,ap:0,d:1,ab:{indirect:true}}],melee:[],models:1,abilities:[]};
+    TEMPLATES.bag2={name:'Bag2',kw:['INFANTRY'],allKw:['INFANTRY'],pts:90,m:6,t:4,sv:4,inv:0,w:99,ld:6,oc:1,ranged:[],melee:[],models:1,abilities:[]};
+    FACTIONS.fa={name:'FA',units:['ind'],color:'imp'};FACTIONS.fb={name:'FB',units:['bag2'],color:'xenos'};
+    pFaction[1]='fa';pFaction[2]='fb';pDetach[1]=null;pDetach[2]=null;turn=1;
+    var realVisible=visible;
+    var a=newUnit('ind',1),t=newUnit('bag2',2);a.deployed=t.deployed=true;a.hx=10;a.hy=10;t.hx=30;t.hy=10;
+    units.length=0;units.push(a,t);
+    visible=function(){return false;};
+    __seedRng(1616);var rNo=resolveAttacks(a,t,a.ranged[0],1,true);
+    var t2=newUnit('bag2',2);t2.deployed=true;t2.hx=30;t2.hy=10;units.length=0;units.push(a,t2);
+    visible=function(){return true;};
+    __seedRng(1616);var rYes=resolveAttacks(a,t2,a.ranged[0],1,true);
+    visible=realVisible;
+    globalThis.__result={noLoS_hits:rNo.hits, loS_hits:rYes.hits, indirectPenaltyApplied:(rNo.hits<=rYes.hits)};
   `
 };
 

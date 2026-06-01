@@ -184,5 +184,35 @@
     "result": {
       "skipped": "no drukhari templates loaded"
     }
+  },
+  "weapon_blast": {
+    "ok": true,
+    "result": {
+      "attacks": 8
+    }
+  },
+  "weapon_melta": {
+    "ok": true,
+    "result": {
+      "nearWoundsLeft": 25,
+      "farWoundsLeft": 27,
+      "meltaDealtMore": true
+    }
+  },
+  "weapon_heavy": {
+    "ok": true,
+    "result": {
+      "stationaryHits": 11,
+      "movedHits": 6,
+      "heavyStrictlyHelped": true
+    }
+  },
+  "weapon_indirect": {
+    "ok": true,
+    "result": {
+      "noLoS_hits": 7,
+      "loS_hits": 9,
+      "indirectPenaltyApplied": true
+    }
   }
 }

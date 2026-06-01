@@ -401,3 +401,49 @@ How it works: a seedable PRNG (mulberry32) replaces `Math.random` (all engine ra
 Validated two ways before being trusted: (1) it is deterministic — green twice in a row against the unchanged engine; (2) it actually catches regressions — a deliberately injected `woundTarget(s==t)` off-by-one was flagged on the exact scenario, then cleared on revert. The first draft of the battery *missed* that injected bug (no scenario hit the equal-Strength branch), which surfaced a coverage gap; a dedicated wound-table branch-coverage scenario was added to close it. The Drukhari-Empowered scenario gracefully skips when the export's real templates aren't loaded, and pins the live Pain-ability join when they are.
 
 Rebuild plan this enables (parallel, derived-token, prove-before-flip): make per-model positions canonical with the token-level `hx`/`hy` becoming a derived centroid (so unmigrated sites keep working), migrate sites in tested passes against this oracle, then build the stronger AI and the mass-sim on the single clean model — no dual-representation fallback to carry or later tear down. Per-model *positions* the rewrite can synthesise and own; per-model *wargear loadouts* stay blocked until a data source carries them, but the engine becomes ready for them.
+
+
+### Core Rules — weapon-ability gap fill (Heavy, Melta, Blast, Indirect Fire)
+An audit of `resolveAttacks` against the Core Rules weapon-ability list found the pipeline already handled Anti-X, Sustained Hits, Lethal Hits, Devastating Wounds, Twin-linked, Torrent, Pistol, Rapid Fire, Assault, Lance, Precision, Hazardous and Ignores Cover. Four genuine gaps were filled, each additive and gated behind its `ab.*` flag so existing combat is untouched:
+- **[BLAST]** — +1 attack per 5 models in the target unit (`+floor(target.models/5)` per attacking model). Verified: 2 models vs a 15-model unit = 8 attacks.
+- **[MELTA X]** — +X Damage when the target is within half range. Verified: more damage dealt at 4" than at long range with identical dice.
+- **[HEAVY]** — +1 to Hit if the bearer's unit Remained Stationary this turn. Verified at BS6+: stationary scored 11 hits to moving's 6 on identical dice.
+- **[INDIRECT FIRE]** — if the attacker has no line of sight to the target, the attack still resolves at −1 to Hit and the target gains the Benefit of Cover. Verified: fewer hits without LoS than with.
+
+This work was done under the equivalence harness: the oracle stayed green across all pre-existing scenarios (proving the additions changed nothing that worked before), and four new scenarios were added and recorded to pin the new behaviour. The harness also caught a too-weak first draft of the Heavy test (equal hit counts that didn't actually demonstrate the bonus), which was tightened to a BS6+ case where the +1 is unmissable. The full battery is now 15 scenarios; an 80-step game with Blast/Melta weapons in the pipeline runs clean.
+
+Remaining Core Rules not yet modelled are the structural/system ones rather than combat-math: the Reserves/Deep Strike deployment system, transports/embark + Firing Deck, aircraft/Hover, and Deadly Demise magnitude (blocked on data) — each tracked elsewhere in this README as dormant.
+
+
+### Per-model rebuild — Pass 1 (the migration seam)
+First concrete step of the per-model rewrite, done under the equivalence oracle. This pass is pure scaffolding: it changes NO behaviour (all 15 oracle scenarios byte-identical green), but installs the seam every later pass will use.
+
+Added to `newUnit`: a dormant `modelPos` field (null). Added two accessors:
+- `positionsOf(u)` → array of model positions; `[{hx,hy}]` derived from the token while `modelPos` is null, the real array once populated.
+- `unitAnchor(u)` → the canonical single position; the token `hx/hy` while null, the centroid of `modelPos` once populated.
+
+First consumer migrated: `dist(a,b)` now measures between `unitAnchor(a)` and `unitAnchor(b)` instead of raw token fields. Because `modelPos` is null everywhere, this is transparent today — but it means distance is already centroid-aware the moment models get positions.
+
+Verified two ways: (1) the oracle is byte-identical green, proving existing behaviour is untouched; (2) a direct seam test confirmed the accessors engage when `modelPos` is populated — `unitAnchor` returns the true centroid (and tracks it as models move), `positionsOf` returns all models, and `dist` measures from the centroid. So the layer is transparent now and live the instant data populates it.
+
+Migration plan from here (each pass proven green before the next): populate `modelPos` at deployment as a cluster around the drop point; make the token `hx/hy` a derived view so unmigrated readers stay correct; migrate remaining position consumers (engagement, visibility, movement, objective range) one at a time through the accessors; then light up the capabilities per-model positions unlock — Unit Coherency, multi-target melee, Blast-vs-clustered-models, base-to-base. Per-model *positions* the rebuild synthesises and owns; per-model *wargear loadouts* stay blocked until a data source carries them, but the structure becomes ready for them.
+
+
+### Per-model rebuild — Pass 2 (populate modelPos, keep it synced)
+Second pass, still behaviour-neutral (all 15 oracle scenarios byte-identical green). Units now carry real per-model positions; the token stays authoritative for now and modelPos tracks it.
+
+`syncModelPos(u)` builds a symmetric cluster of `u.models` positions centred on the token (anchor cell first, then a ring of ±1/±2 offsets). Because the cluster is symmetric its centroid equals the token exactly, so `unitAnchor()` — and every consumer routed through it — is unchanged. It is called at every lifecycle point that sets or changes position: deployment, reinforcement arrival, Normal/Fall Back/Advance moves, charge (`moveAdjacent`), Pile In / Consolidate (`stepToward` and its undo paths), the AI objective move, and after damage (so the array shrinks with casualties). Going into Reserves clears `modelPos` to null.
+
+Verified: (1) oracle byte-identical green — the symmetric-cluster centroid keeps `unitAnchor` pinned to the token; (2) a direct test showed modelPos populating at deploy (5 positions, centroid on token), tracking a move (centroid follows to the new cell), and shrinking with casualties (5→2 in lockstep with `models`); (3) an 80-step full game ran clean with a post-game integrity check finding zero modelPos/model-count desync across all phases.
+
+State after Pass 2: the per-model representation is live and self-maintaining, but no consumer reads it for behaviour yet — the token remains the source of truth. Next passes: invert authority (modelPos becomes canonical, token becomes the derived centroid) once the remaining position consumers (engagement, visibility, objective range) read through the accessors; then enable the capabilities per-model positions unlock (Unit Coherency, multi-target melee, Blast-vs-clustered-models, base-to-base).
+
+
+### Per-model rebuild — Pass 3 (migrate the measurement consumers)
+Third pass, still behaviour-neutral (15/15 oracle byte-identical green). Every position *measurement* now reads through the accessors, so no measurement consumer cares anymore whether the token or modelPos is authoritative — the precondition for the authority-inversion pass.
+
+Migrated to read `unitAnchor`/`positionsOf`: `visible` (line-of-sight), `engaged` and `pathThroughOpenHatch` (engagement range — so `inER` and every Fight/AI caller inherit it), `unitOnObjective`, both objective-control scoring loops, `hasCover` (objective + barricade reads), and the faction sticky-objective check. Deliberately left token-based for now: the raw `Math.hypot(u.hx-…)` reads *inside movement functions* that test a candidate destination cell — those are about where a unit is trying to move to, not where its footprint is, and they belong to the authority-inversion pass which handles movement holistically.
+
+Verified beyond transparency: with an asymmetric `modelPos` whose centroid is displaced from the token, `engaged` correctly flips to true when the centroid (not the token) is in range, and `unitOnObjective` follows the centroid too — proving the consumers genuinely read the per-model footprint, not merely fall through to the token. Oracle byte-identical green (Pass-2 clusters are symmetric, so centroid==token in normal play); 80-step full game clean with zero modelPos desync.
+
+Next: authority inversion — make `modelPos` canonical and the token a derived centroid, then migrate the movement candidate-cell reads as part of that holistic change. After that, the capabilities per-model positions unlock (Unit Coherency, multi-target melee, Blast-vs-clustered-models, base-to-base).

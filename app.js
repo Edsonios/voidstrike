@@ -168,7 +168,7 @@ function detachOf(p){const d=factionDataFor(p);if(!d||!pDetach[p])return null;re
 function armyRuleOf(p){const det=detachOf(p);if(det&&det.armyRule)return det.armyRule;const d=factionDataFor(p);return d?d.armyRule:null;}
 
 function unitHasKw(u,kw){return (u.kw||[]).includes(kw)||(u.allKw||[]).includes(kw);}
-function unitOnObjective(u){return objectives.some(o=>Math.hypot(o.hx-u.hx,o.hy-u.hy)<=1.5);}
+function unitOnObjective(u){const a=unitAnchor(u);return objectives.some(o=>Math.hypot(o.hx-a.hx,o.hy-a.hy)<=1.5);}
 function isDeathwing(u){
   // Explicit keyword, or (Dark Angels chapter) granted to Terminators / certain veterans / Dreadnoughts / Land Raiders & Repulsors
   if(unitHasKw(u,'DEATHWING'))return true;
@@ -562,7 +562,7 @@ function objectiveControlInZone(zone){
     if(zoneOfCell(o.hx,o.hy)!==zone)return;
     r.total++;
     let oc={1:0,2:0};
-    units.forEach(u=>{if(!u.dead&&u.deployed&&!u.inReserve&&Math.hypot(o.hx-u.hx,o.hy-u.hy)<=1.5)oc[u.player]+=ocOf(u);});
+    units.forEach(u=>{if(!u.dead&&u.deployed&&!u.inReserve){const a=unitAnchor(u);if(Math.hypot(o.hx-a.hx,o.hy-a.hy)<=1.5)oc[u.player]+=ocOf(u);}});
     if(oc[1]>oc[2])r[1]++;else if(oc[2]>oc[1])r[2]++;
   });
   return r;
@@ -1231,11 +1231,57 @@ function newUnit(tplKey,player){
   return {id:crypto.randomUUID(),tpl:tplKey,name:t.name,player,kw:[...t.kw],allKw:[...(t.allKw||t.kw||[])],
     m:t.m,t:t.t,sv:t.sv,inv:t.inv,w:t.w,ld:t.ld,oc:t.oc,pts:t.pts,abilities:t.abilities||[],
     maxModels:t.models,models:t.models,woundsLeft:t.w,ranged:t.ranged,melee:t.melee,enh:null,
-    hx:-1,hy:-1,deployed:false,moved:false,advanced:false,fellback:false,charged:false,fought:false,
+    hx:-1,hy:-1,modelPos:null,deployed:false,moved:false,advanced:false,fellback:false,charged:false,fought:false,
     inReserve:false,_setupThisTurn:false,_arriveExtraMove:null,
     shotWith:[],bshock:false,dead:false,_stratAtk:[],_stratDef:[],_ocBonus:0,_ocMult:1,_orderMove:0,_orderOc:0,_orderLd:0};
 }
 function totalWounds(u){return (u.models-1)*u.w+u.woundsLeft;}
+/* ---- Per-model position layer (migration seam, Pass 1: scaffolding only) -------------------
+   The engine is moving from a single-token representation toward per-model positions. To do that
+   without a disruptive rewrite, position is accessed through these helpers. While `u.modelPos` is
+   null (the current state), they derive everything from the token `hx/hy`, so behaviour is
+   byte-identical to before — proven by the equivalence oracle. Later passes will (a) populate
+   `modelPos` as an array of {hx,hy} at deployment, and (b) make the token fields a derived view
+   (centroid) so any not-yet-migrated reader still sees a sensible single position.
+   positionsOf(u) -> array of model positions ([{hx,hy}], length 1 until populated).
+   unitAnchor(u)  -> the canonical single position (centroid of modelPos, or the token).            */
+function positionsOf(u){
+  if(u&&u.modelPos&&u.modelPos.length)return u.modelPos;
+  return [{hx:u?u.hx:-1,hy:u?u.hy:-1}];
+}
+function unitAnchor(u){
+  if(u&&u.modelPos&&u.modelPos.length){
+    let sx=0,sy=0;for(const p of u.modelPos){sx+=p.hx;sy+=p.hy;}
+    return {hx:sx/u.modelPos.length,hy:sy/u.modelPos.length};
+  }
+  return {hx:u?u.hx:-1,hy:u?u.hy:-1};
+}
+/* Pass 2: populate per-model positions as a symmetric cluster centred on the token (hx,hy).
+   Because the cluster is symmetric, its centroid equals the token exactly, so unitAnchor() — and
+   therefore every consumer already routed through it, like dist() — is byte-identical to before.
+   The token remains the authoritative anchor for now; modelPos tracks it. A later pass will invert
+   this (modelPos becomes authoritative, token becomes the derived centroid) once enough consumers
+   read modelPos directly. Cluster pattern: the anchor cell first, then a ring of offsets, so a
+   1-model unit sits exactly on the token and larger units fan out by ~1 cell — close enough to the
+   2" coherency spacing the board uses without yet enforcing coherency. */
+const _CLUSTER_OFFSETS=[[0,0],[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,-1],[1,-1],[-1,1],[2,0],[-2,0],[0,2]];
+function syncModelPos(u){
+  if(!u||u.dead){if(u)u.modelPos=null;return;}
+  const n=Math.max(1,u.models|0);
+  const out=[];
+  for(let i=0;i<n;i++){
+    const off=_CLUSTER_OFFSETS[i%_CLUSTER_OFFSETS.length];
+    out.push({hx:clamp(u.hx+off[0],0,GW-1),hy:clamp(u.hy+off[1],0,GH-1)});
+  }
+  // re-centre so the centroid lands exactly on the token (clamping at board edges could skew it);
+  // if the centroid drifted, fall back to all-models-on-anchor to preserve unitAnchor()==token.
+  let sx=0,sy=0;for(const p of out){sx+=p.hx;sy+=p.hy;}
+  const cx=sx/out.length, cy=sy/out.length;
+  if(Math.abs(cx-u.hx)>1e-9||Math.abs(cy-u.hy)>1e-9){
+    for(const p of out){p.hx=u.hx;p.hy=u.hy;}   // edge case: keep anchor exact (transparency over fan-out)
+  }
+  u.modelPos=out;
+}
 function maxWounds(u){return u.maxModels*u.w;}
 function belowHalf(u){return totalWounds(u)<=maxWounds(u)/2;}
 
@@ -1378,17 +1424,19 @@ function segBlocked(ax,ay,bx,by){
   return false;
 }
 function rawDist(a,b){return Math.hypot(a.hx-b.hx,a.hy-b.hy)*HEX_INCH;}
-function dist(a,b){return rawDist(a,b);}
-function visible(a,b){return !segBlocked(a.hx,a.hy,b.hx,b.hy);}
+function dist(a,b){return rawDist(unitAnchor(a),unitAnchor(b));}
+function visible(a,b){const A=unitAnchor(a),B=unitAnchor(b);return !segBlocked(A.hx,A.hy,B.hx,B.hy);}
 function pathThroughOpenHatch(a,b){
-  const A=cellCenter(a.hx,a.hy),B=cellCenter(b.hx,b.hy);
+  const aa=unitAnchor(a),bb=unitAnchor(b);
+  const A=cellCenter(aa.hx,aa.hy),B=cellCenter(bb.hx,bb.hy);
   for(const w of hatchways){if(!w.open)continue;const s=wallSeg(w);if(segInt(A.x,A.y,B.x,B.y,s[0],s[1],s[2],s[3]))return true;}
   return false;
 }
 const ENGAGE_IN=2.9;   // base-to-base reach: adjacent cells (orthogonal/diagonal)
 function engaged(a,b){
-  if(segBlocked(a.hx,a.hy,b.hx,b.hy))return false;
-  const d=rawDist(a,b);
+  const A=unitAnchor(a),B=unitAnchor(b);
+  if(segBlocked(A.hx,A.hy,B.hx,B.hy))return false;
+  const d=rawDist(A,B);
   if(d<=ENGAGE_IN)return true;
   if(d<=ENGAGE_IN+1.3&&pathThroughOpenHatch(a,b))return true;
   return false;
@@ -1413,8 +1461,8 @@ function logDice(arr){
 function woundTarget(s,t){if(s>=t*2)return 2;if(s>t)return 3;if(s===t)return 4;if(s*2<=t)return 6;return 5;}
 function hasCover(att,def){
   if(walls.length){return walls.some(w=>{if(w.hatch&&w.open)return false;
-    const wx=w.type==='v'?w.x:w.x+0.5,wy=w.type==='v'?w.y+0.5:w.y;return Math.hypot(wx-def.hx,wy-def.hy)<=1.2;});}
-  return objectives.some(o=>Math.hypot(o.hx-def.hx,o.hy-def.hy)<=1.5);
+    const wx=w.type==='v'?w.x:w.x+0.5,wy=w.type==='v'?w.y+0.5:w.y;const da=unitAnchor(def);return Math.hypot(wx-da.hx,wy-da.hy)<=1.2;});}
+  const da2=unitAnchor(def);return objectives.some(o=>Math.hypot(o.hx-da2.hx,o.hy-da2.hy)<=1.5);
 }
 
 /* Resolve a full attack sequence (used by auto-resolve & by manual roll). Returns a report. */
@@ -1434,10 +1482,18 @@ function resolveAttacks(att,def,weapon,nModels,silent){
   if(ab.rapidfire&&weapon.type==="R"&&dist(att,def)<=weapon.rng/2)perModel+=ab.rapidfire;
   if(perModel<1)perModel=1;
   let attacks=perModel*nModels;
+  // [BLAST]: +1 attack for every 5 models in the target unit (rounding down), per the Core Rules.
+  if(ab.blast&&weapon.type==="R"){attacks+=Math.floor((def.models||1)/5)*nModels;}
   const wStr=Math.max(1, weapon.s + (mods?(isMelee?mods.plusStrMelee:mods.plusStrRanged):0) - (mods?mods.subIncomingStr:0));
   const wAp=weapon.ap - (mods?(isMelee?mods.plusApMelee:mods.plusApRanged):0); // ap stored negative; subtract to improve
   // ignoreMods (e.g. "ignore modifiers to Hit") cancels NEGATIVE hit modifiers against this attacker
-  const hitAdd=mods?(mods.ignoreMods?Math.max(0,mods.addHit):mods.addHit):0;
+  let hitAdd=mods?(mods.ignoreMods?Math.max(0,mods.addHit):mods.addHit):0;
+  // [HEAVY]: +1 to Hit if the bearer's unit Remained Stationary this turn (ranged only).
+  if(ab.heavy&&weapon.type==="R"&&!att.moved&&!att.advanced&&!att.fellback)hitAdd+=1;
+  // [INDIRECT FIRE]: if no model in the target is visible, the attack may still be made at -1 to Hit
+  // (and the target gains cover — handled below). Applied only when the attacker has no line of sight.
+  let indirectNoLoS=false;
+  if(ab.indirect&&weapon.type==="R"&&typeof visible==='function'&&!visible(att,def)){hitAdd-=1;indirectNoLoS=true;}
   const skill=clamp(weapon.skill - hitAdd,2,6);
   if(!silent){let line=`<span class="roll">${att.name}</span> ▸ <span class="roll">${def.name}</span> · ${weapon.name} · <b>${attacks}</b> attacks`;
     if(mods&&mods.note)line+=` <span class="sys">[${mods.note}]</span>`;log("",line);}
@@ -1477,6 +1533,7 @@ function resolveAttacks(att,def,weapon,nModels,silent){
   let normalWounds=wounds-devastating;if(normalWounds<0)normalWounds=0;
   let failed=0;const saveDice=[];
   let cover=hasCover(att,def)&&weapon.type==="R";
+  if(indirectNoLoS)cover=true;                    // [INDIRECT FIRE] with no line of sight: target gains Benefit of Cover
   if(mods&&mods.ignoresCover)cover=false;
   if(mods&&mods.grantCoverDef&&weapon.type==='R')cover=true;
   let apEff=-wAp;                                  // positive number = penalty to save
@@ -1495,6 +1552,8 @@ function resolveAttacks(att,def,weapon,nModels,silent){
   if(!silent){logDice(saveDice);let sm=`&nbsp;&nbsp;Saves: <span class="save">${normalWounds-failed} saved</span>`;
     if(cover)sm+=` (cover)`;if(useInv)sm+=` (invuln ${invUsed||def.inv}+)`;log("",sm);}
   let perHit=weapon.d - (mods?mods.reduceIncomingDmg:0);if(perHit<1)perHit=1;
+  // [MELTA X]: +X Damage when targeting a unit within half range (ranged only).
+  if(ab.melta&&weapon.type==="R"&&dist(att,def)<=weapon.rng/2)perHit+=ab.melta;
   const totalDamage=failed*perHit,mortal=devastating*perHit;
   if(!silent&&mortal)log("",`&nbsp;&nbsp;Mortal wounds: <span class="kill">${mortal}</span>`);
   // Feel No Pain (defender)
@@ -1516,6 +1575,7 @@ function applyDamage(u,normalDamage,dPerHit,mortal,silent,fnp){
     for(let h=0;h<hits;h++){const dealt=fnpFilter(dPerHit);for(let x=0;x<dealt;x++)dmgChunk(u,1,true);}}
   if(mortal){const m2=fnpFilter(mortal);for(let m=0;m<m2;m++)dmgChunk(u,1,true);}
   const lost=before-totalWounds(u);
+  if(u.modelPos)syncModelPos(u);
   if(silent)return;
   if(u.dead){log("kill",`&nbsp;&nbsp;☠ ${u.name} DESTROYED!`);cultAmbushResurrect(u);painOnEnemyDeath(u);ypOnEnemyDeath(u);ecOnEnemyDeath(u,units.find(x=>x.id===selId&&x.player!==u.player&&!x.dead));miracleOnDeath(u);}
   else if(lost>0)log("",`&nbsp;&nbsp;${u.name} −<span class="kill">${lost}</span>W${fnp?' (after FNP '+fnp+'+)':''} · ${u.models} model(s) left.`);
@@ -1531,6 +1591,7 @@ function dmgChunk(u,dmg,spill){let rem=dmg;
 function applyMortals(u,n){
   if(!u||u.dead||n<=0)return;
   dmgChunk(u,n,true);
+  if(u.modelPos)syncModelPos(u);
   if(u.dead){log("kill",`&nbsp;&nbsp;☠ ${u.name} DESTROYED!`);cultAmbushResurrect(u);painOnEnemyDeath(u);ypOnEnemyDeath(u);ecOnEnemyDeath(u,units.find(x=>x.id===selId&&x.player!==u.player&&!x.dead));miracleOnDeath(u);}
 }
 /* Reanimation Protocols: heal up to `wounds` across the unit.
@@ -1769,10 +1830,10 @@ function tryMove(u,hx,hy){
   const startER=inER(u);
   const wouldER=units.some(e=>!e.dead&&e.player!==u.player&&Math.hypot(e.hx-hx,e.hy-hy)*HEX_INCH<=ENGAGE_IN&&!segBlocked(e.hx,e.hy,hx,hy));
   if(startER){
-    if(d<=eM&&!wouldER){u.hx=hx;u.hy=hy;u.fellback=true;u.moved=true;log("sys",`${u.name} Falls Back ${d.toFixed(1)}″.`);
+    if(d<=eM&&!wouldER){u.hx=hx;u.hy=hy;u.fellback=true;u.moved=true;syncModelPos(u);log("sys",`${u.name} Falls Back ${d.toFixed(1)}″.`);
       if(u.bshock){const r=d6();if(r<=2){u.models=Math.max(0,u.models-1);log("kill","&nbsp;&nbsp;Desperate Escape: 1 model lost.");}}}
     else{updateHint("In Engagement Range — Fall Back clear of the enemy, or stay.");return;}
-  }else if(d<=eM&&!wouldER){u.hx=hx;u.hy=hy;u.moved=true;log("sys",`${u.name} Normal move ${d.toFixed(1)}″.`);}
+  }else if(d<=eM&&!wouldER){u.hx=hx;u.hy=hy;u.moved=true;syncModelPos(u);log("sys",`${u.name} Normal move ${d.toFixed(1)}″.`);}
   else if(!wouldER){
     // needs an Advance — set up an interactive roll
     if(d>eM+6){updateHint(`Too far even with a max Advance (need ${d.toFixed(1)}″, max ${eM+6}″).`);return;}
@@ -1784,7 +1845,7 @@ function tryMove(u,hx,hy){
 function rollAdvance(){
   const a=action;const adv=d6();const tot=a.u.m+(a.u._bfMove||0)+(a.u._orderMove||0)+adv;
   log("",`${a.u.name} Advance: rolled <b>${adv}</b> → ${tot}″ move.`);logDice([{v:adv}]);
-  if(a.need<=tot){a.u.hx=a.hx;a.u.hy=a.hy;a.u.moved=true;a.u.advanced=true;
+  if(a.need<=tot){a.u.hx=a.hx;a.u.hy=a.hy;a.u.moved=true;a.u.advanced=true;syncModelPos(a.u);
     log("sys",`&nbsp;&nbsp;Reached destination (${a.need.toFixed(1)}″). No shooting (non-Assault) or charging.`);}
   else log("miss",`&nbsp;&nbsp;Advance fell short of ${a.need.toFixed(1)}″ — ${a.u.name} stays put.`);
   action=null;showActionPanel(false);render();renderAll();updateHint();
@@ -1837,7 +1898,7 @@ function moveAdjacent(u,tgt){
   const dx=Math.sign(tgt.hx-u.hx),dy=Math.sign(tgt.hy-u.hy);
   let nx=clamp(tgt.hx-dx,0,GW-1),ny=clamp(tgt.hy-dy,0,GH-1);
   if(cellOccupied(nx,ny,u.id)){nx=clamp(tgt.hx-dx,0,GW-1);ny=clamp(tgt.hy,0,GH-1);}
-  u.hx=nx;u.hy=ny;
+  u.hx=nx;u.hy=ny;syncModelPos(u);
 }
 
 /* In-combat movement on the single-token board. The real game moves each MODEL up to 3" toward the closest
@@ -1873,7 +1934,7 @@ function stepToward(u,tx,ty,maxInch){
       if(nd<bd-1e-6){bd=nd;best={nx,ny,cost:stepCost};}
     }
     if(!best)break;
-    u.hx=best.nx;u.hy=best.ny;budget-=best.cost;moved=true;
+    u.hx=best.nx;u.hy=best.ny;budget-=best.cost;moved=true;syncModelPos(u);
   }
   return moved;
 }
@@ -1894,7 +1955,7 @@ function consolidateMove(u){
     const before={hx:u.hx,hy:u.hy};
     let moved=stepToward(u,tgt.hx,tgt.hy,3);
     if(moved&&inER(u))return true;            // reached/closed on an enemy — good
-    if(moved&&!inER(u)){u.hx=before.hx;u.hy=before.hy;moved=false;} // would end out of engagement via enemy path; try objective instead
+    if(moved&&!inER(u)){u.hx=before.hx;u.hy=before.hy;moved=false;syncModelPos(u);} // would end out of engagement via enemy path; try objective instead
     if(moved)return true;
   }
   // toward closest objective, but only finish if we end within range (≤1.5 cells), per the rules' fallback
@@ -1902,7 +1963,7 @@ function consolidateMove(u){
     let best=null,bd=1e9; objectives.forEach(o=>{const d=Math.hypot(o.hx-u.hx,o.hy-u.hy);if(d<bd){bd=d;best=o;}});
     if(best){const before={hx:u.hx,hy:u.hy};const moved=stepToward(u,best.hx,best.hy,3);
       if(moved&&Math.hypot(u.hx-best.hx,u.hy-best.hy)<=1.5)return true;
-      u.hx=before.hx;u.hy=before.hy;} // couldn't end in range — undo
+      u.hx=before.hx;u.hy=before.hy;syncModelPos(u);} // couldn't end in range — undo
   }
   return false;
 }
@@ -2011,7 +2072,7 @@ function unitHasDeepStrike(u){
 }
 function reserveUnit(u,silent){
   if(!u||u.dead||u.inReserve)return false;
-  u.inReserve=true;u.deployed=false;u.hx=-1;u.hy=-1;
+  u.inReserve=true;u.deployed=false;u.hx=-1;u.hy=-1;u.modelPos=null;
   u.moved=u.advanced=u.fellback=u.charged=false;
   if(!silent)log("sys",`${u.name} removed to Strategic Reserves.`);
   return true;
@@ -2024,7 +2085,7 @@ function deepStrikePlace(u,hx,hy){
   // >9" horizontally from every enemy model
   const tooClose=units.some(e=>!e.dead&&e.player!==u.player&&e.deployed&&Math.hypot(e.hx-hx,e.hy-hy)*HEX_INCH<9);
   if(tooClose){updateHint("Deep Strike must be more than 9″ from all enemy units.");return false;}
-  u.inReserve=false;u.deployed=true;u.hx=hx;u.hy=hy;
+  u.inReserve=false;u.deployed=true;u.hx=hx;u.hy=hy;syncModelPos(u);
   u._setupThisTurn=true;u.moved=true;   // arriving counts as having moved (cannot also Normal-move)
   log("sys",`${u.name} arrives from Deep Strike.`);
   // optional bonus move granted on arrival (e.g. "make a D6 move after arriving")
@@ -2057,7 +2118,7 @@ function placeUnit(hx,hy){
   const nd=nextDeployUnit();if(!nd)return;const {p,u}=nd;
   if(!inEntryZone(p,hx,hy)){updateHint(`<b>${PNAME[p]}</b> must deploy inside their Entry Zone.`);return;}
   if(cellOccupied(hx,hy)){updateHint("Cell occupied.");return;}
-  u.hx=hx;u.hy=hy;u.deployed=true;log("sys",`${PNAME[p]} deploys ${u.name}.`);
+  u.hx=hx;u.hy=hy;u.deployed=true;syncModelPos(u);log("sys",`${PNAME[p]} deploys ${u.name}.`);
   deployIdx[p]++;deployTurn=deployTurn===1?2:1;
   if(deployIdx[1]>=deployList[1].length&&deployIdx[2]>=deployList[2].length){
     deploying=false;turn=1;phaseIdx=0;log("hd","◆ ALL FORCES DEPLOYED — BATTLE BEGINS");grantBattleFocus(1);grantBattleFocus(2);grantResurgence(1);grantResurgence(2);grantFlux(1);grantFlux(2);seedDread(1);seedDread(2);allianceOfAgony(1);allianceOfAgony(2);ecSeedFavoured(1);ecSeedFavoured(2);ecMakePledge(1,1);ecMakePledge(2,1);grantMiracleRound(1);grantMiracleRound(2);beginPhase();}
@@ -2625,7 +2686,7 @@ function votannCommandYield(p){
     objectives.forEach(o=>{
       if(zoneOfCell(o.hx,o.hy)===own)return;
       const ctrl=objectiveControlledBy(o,p); if(!ctrl)return;
-      const near=units.some(u=>u.player===p&&!u.dead&&u.deployed&&!u.inReserve&&(unitHasKw(u,'IRON-MASTER')||unitHasKw(u,'MEMNYR STRATEGIST'))&&Math.hypot(o.hx-u.hx,o.hy-u.hy)<=1.5);
+      const near=units.some(u=>u.player===p&&!u.dead&&u.deployed&&!u.inReserve&&(unitHasKw(u,'IRON-MASTER')||unitHasKw(u,'MEMNYR STRATEGIST'))&&Math.hypot(o.hx-unitAnchor(u).hx,o.hy-unitAnchor(u).hy)<=1.5);
       if(near)bonus++;
     });
     if(bonus>0)gainYP(p,Math.min(2,bonus),'Optimal Application');
@@ -2635,7 +2696,7 @@ function votannCommandYield(p){
 }
 function objectiveControlledBy(o,p){
   let oc={1:0,2:0};
-  units.forEach(u=>{if(!u.dead&&u.deployed&&!u.inReserve&&Math.hypot(o.hx-u.hx,o.hy-u.hy)<=1.5)oc[u.player]+=ocOf(u);});
+  units.forEach(u=>{if(!u.dead&&u.deployed&&!u.inReserve){const a=unitAnchor(u);if(Math.hypot(o.hx-a.hx,o.hy-a.hy)<=1.5)oc[u.player]+=ocOf(u);}});
   return oc[p]>oc[p===1?2:1]&&oc[p]>0;
 }
 function updateVotannStance(p){
@@ -3209,7 +3270,7 @@ function autoResolvePhase(){
         const d=Math.hypot(foe.hx-nx,foe.hy-ny);
         if(d<bestD&&(!wouldER||d<=Math.hypot(foe.hx-u.hx,foe.hy-u.hy))){bestD=d;best={nx,ny};}
       }
-      if(best){u.hx=best.nx;u.hy=best.ny;u.moved=true;}
+      if(best){u.hx=best.nx;u.hy=best.ny;u.moved=true;syncModelPos(u);}
     });
     operateHatchways();
     advancePhase();return;

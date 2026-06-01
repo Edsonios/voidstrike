@@ -346,6 +346,17 @@
       "enclosedDestroyed": true
     }
   },
+  "fight_cluster": {
+    "ok": true,
+    "result": {
+      "tenDistinct": true,
+      "centroidOnAnchor": true,
+      "perModelEngaged": true,
+      "staged": true,
+      "foughtAndCleared": true,
+      "someFoeHit": true
+    }
+  },
   "plasmacyte": {
     "ok": true,
     "result": {

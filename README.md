@@ -715,3 +715,31 @@ First phase of the staged-interaction rebuild. Movement no longer resolves on cl
 `beginMoveStage` builds the plan, `evaluateMoveStage` classifies legality (reusing the real path/ER/aircraft-arc logic), `confirmMoveStage` commits via `placeModelsLine` (free-placed formation) or hands off to the Advance D6 roll (which now also honors the staged line). The renderer's `drawMovePreview` draws the staged ghosts. All resolution logic is unchanged — this is a pure interaction layer in front of it, so the 28 oracle scenarios stay green. Verified end-to-end: a 4" click stages a legal Normal move, Confirm places the 5-model line centred on the destination, an out-of-range click reads 'Too far' with no Confirm offered.
 
 NEXT: apply the same stage->confirm pattern to Shooting (assign weapons->targets, preview, confirm-resolve), Charge (declare targets, preview roll), and Fight (pile-in/attacks/consolidate staging), per the pasted phase rules. Then animation + dice panel.
+
+
+### Setup -> confirm interaction: Shooting phase
+Shooting now follows the pasted sequence: select unit -> assign weapons to targets -> confirm -> resolve all. Instead of each weapon resolving on click, `shootPickTarget` STAGES a {weapon,target} assignment (reassigning a weapon replaces its prior assignment); the panel lists all staged shots (tap to remove via `unstageShot`); a single "Resolve N shots" button runs `confirmShoot`, which resolves all attacks grouped by target (all attacks vs one unit before the next) with same-profile weapons sorted together, skips Pistols-only restriction when in ER, and accounts for targets destroyed mid-sequence. Resolution still uses the unchanged `resolveAttacks`, so the 28 oracle scenarios stay green.
+
+Verified end-to-end: two weapons assigned to two different targets stage as 2 assignments and Confirm resolves both (confirmed across seeds that the second assignment lands damage — the earlier single-seed zero was an RNG/saves artifact of the test, not the code). Same stage->confirm shape as Movement.
+
+NEXT: Charge (declare targets -> preview 2D6 -> confirm) and Fight (pile-in/attacks/consolidate staging), then animation + dice panel.
+
+
+### Setup -> confirm interaction: Charge phase
+Charge now follows the pasted sequence with MULTI-TARGET declaration: select unit -> declare one or more targets within 12" (tap to toggle in/out) -> Confirm rolls 2D6 -> succeeds only if the roll reaches Engagement Range of EVERY declared target (need = max over targets of dist-ENGAGE_IN). `chargePickTarget` now toggles a target in/out of `action.selected[]`; the panel shows checked targets and the longest required distance; `confirmCharge` rolls and resolves, moving toward the nearest declared target on success (single-anchor abstraction) and setting the charged/Fights-First flag, or logging a failed charge with no movement. AIRCRAFT still cannot charge, and only FLY units may declare an AIRCRAFT as a target (unchanged eligibility).
+
+Verified: two enemies declarable, toggling removes/re-adds a target, a forced-high roll succeeds and moves the charger into ER (Fights First set), a forced-low roll fails with the unit unmoved and uncharged. 28 scenarios green (no resolution logic changed). Same stage->confirm shape as Movement/Shooting.
+
+NEXT: Fight (pile-in / make-attacks / consolidate staging per the pasted Fight rules), then animation + dice panel.
+
+
+### Setup -> confirm interaction: Fight phase (+ two latent bugs fixed)
+Fight now follows the pasted sequence: select engaged unit -> Pile In (auto, 3" toward closest enemy) -> declare target(s) + melee weapon -> Confirm resolves all melee then Consolidates. `beginFightSelection` piles in and stages `{kind:'fight', selected:[], weapon}`; `fightPickTarget` toggles targets (multi-target), `fightPickWeapon` picks the melee profile; `confirmFight` allocates models across declared targets via the engine's per-model `meleeTargetSplit` (auto-splits to all engaged foes if none declared), resolves attacks per target, sets `fought`, and consolidates. AIRCRAFT melee restrictions and Fights-First (charged) handling unchanged.
+
+Building the multi-target case exposed TWO latent bugs the finer grid had introduced, now fixed:
+1. **Cluster collapse**: `syncModelPos` collapsed ALL models of a 10+ unit onto the anchor (the 12 cluster offsets are asymmetric, so the centroid drifted and the old code fell back to all-on-anchor). Fixed by RECENTERING the cluster (subtract the mean offset) instead of collapsing — models stay spread AND the centroid stays exactly on the anchor, so distance math is unchanged. A 10-model unit now occupies 10 distinct positions with centroid on the anchor.
+2. **Anchor-only engagement**: `engaged()` measured anchor-to-anchor vs ENGAGE_IN, so a correctly-spread unit failed to engage foes its edge models were touching. Made `engaged()` per-model (min distance over all model pairs, anchor fallback when positions absent) — consistent with `meleeTargetSplit` and more rule-faithful.
+
+Both were verified harmless to existing behaviour (single/tight units measure identically) — 28 prior scenarios stayed green, a 120-step 10-model game ran clean. New scenario `fight_cluster` pins all of it (10 distinct positions, centroid on anchor, per-model engagement, staged fight resolves + clears). 29 scenarios green.
+
+ALL FOUR PHASES now use stage->confirm (Movement, Shooting, Charge, Fight). NEXT: smooth movement animation, then the dice panel + event-log rework.

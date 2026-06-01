@@ -1506,12 +1506,16 @@ function syncModelPos(u){
     const off=_CLUSTER_OFFSETS[i%_CLUSTER_OFFSETS.length];
     out.push({hx:clampf(u.hx+off[0],0,GW-1),hy:clampf(u.hy+off[1],0,GH-1)});
   }
-  // re-centre so the centroid lands exactly on the token (clamping at board edges could skew it);
-  // if the centroid drifted, fall back to all-models-on-anchor to preserve unitAnchor()==token.
+  // re-centre so the centroid lands exactly on the token: subtract the cluster's mean offset from every
+  // model. This keeps unitAnchor()==token (so distance math is unchanged) WHILE preserving the spread —
+  // important for multi-target melee/coherency, which need models at distinct positions. (The old code
+  // collapsed all models onto the anchor when the offset set was asymmetric, e.g. 10+ models, which
+  // starved per-model targeting; recentering fixes that without moving the centroid.)
   let sx=0,sy=0;for(const p of out){sx+=p.hx;sy+=p.hy;}
   const cx=sx/out.length, cy=sy/out.length;
-  if(Math.abs(cx-u.hx)>1e-9||Math.abs(cy-u.hy)>1e-9){
-    for(const p of out){p.hx=u.hx;p.hy=u.hy;}   // edge case: keep anchor exact (transparency over fan-out)
+  const ddx=u.hx-cx, ddy=u.hy-cy;
+  if(Math.abs(ddx)>1e-9||Math.abs(ddy)>1e-9){
+    for(const p of out){p.hx=clampf(p.hx+ddx,0,GW-1);p.hy=clampf(p.hy+ddy,0,GH-1);}
   }
   u.modelPos=out;
   recenterToken(u);
@@ -1859,10 +1863,16 @@ function pathThroughOpenHatch(a,b){
 const ENGAGE_IN=2.9;   // base-to-base reach: adjacent cells (orthogonal/diagonal)
 function engaged(a,b){
   const A=unitAnchor(a),B=unitAnchor(b);
+  // Per-model engagement: units are engaged if ANY model of one is within Engagement Range of any model of
+  // the other (models are physically spread, so anchor-to-anchor distance under-counts — edge models can be
+  // touching while centroids are >ER apart). Falls back to anchor distance when positions are absent.
+  const ap=(a.modelPos&&a.modelPos.length)?a.modelPos:[A];
+  const bp=(b.modelPos&&b.modelPos.length)?b.modelPos:[B];
+  let dmin=Infinity;
+  for(const p of ap)for(const q of bp){const d=rawDist(p,q);if(d<dmin)dmin=d;}
   if(segBlocked(A.hx,A.hy,B.hx,B.hy))return false;
-  const d=rawDist(A,B);
-  if(d<=ENGAGE_IN)return true;
-  if(d<=ENGAGE_IN+1.3&&pathThroughOpenHatch(a,b))return true;
+  if(dmin<=ENGAGE_IN)return true;
+  if(dmin<=ENGAGE_IN+1.3&&pathThroughOpenHatch(a,b))return true;
   return false;
 }
 function inER(u){return units.some(e=>!e.dead&&e.player!==u.player&&engaged(u,e));}
@@ -2363,22 +2373,41 @@ function beginShootSelection(u){
   if(u.advanced&&!u.ranged.some(w=>w.ab.assault)&&!unitHasElig(u,'eligShootAfterAdvance')){updateHint(`${u.name} Advanced and has no Assault weapons.`);return;}
   if(u.fellback&&!unitHasElig(u,'eligShootAfterFallBack')){updateHint(`${u.name} Fell Back — cannot shoot.`);return;}
   if(!u.ranged.length){updateHint(`${u.name} has no ranged weapons.`);return;}
-  action={kind:'shoot',u,weapon:null,target:null};
+  // staged: accumulate weapon->target assignments, resolve all on confirm (per the Shooting sequence)
+  action={kind:'shoot',u,weapon:null,target:null,assignments:[]};
   selId=u.id;showActionPanel(true);renderAction();render();
 }
 function shootPickWeapon(idx){if(action&&action.kind==='shoot'){action.weapon=idx;action.target=null;renderAction();render();}}
-function shootPickTarget(t){if(action&&action.kind==='shoot'){action.target=t.id;renderAction();render();}}
-function rollShoot(){
-  const a=action;const u=a.u;const w=u.ranged[a.weapon];const tgt=units.find(x=>x.id===a.target);
-  if(!w||!tgt)return;
-  const er=inER(u);
-  if(er&&!w.ab.pistol){updateHint("In Engagement Range — only Pistols may fire.");return;}
-  resolveAttacks(u,tgt,w,u.models,false);
-  u.shotWith.push(a.weapon);
-  scoreObjectivesLive();
-  // allow firing remaining weapons; keep panel open with weapon cleared
-  a.weapon=null;a.target=null;renderAction();renderAll();render();
+function shootPickTarget(t){
+  const a=action;if(!a||a.kind!=='shoot'||a.weapon==null)return;
+  // stage this weapon->target assignment (don't resolve yet); a weapon already staged is reassigned
+  a.assignments=a.assignments.filter(as=>as.weapon!==a.weapon);
+  a.assignments.push({weapon:a.weapon,target:t.id});
+  a.weapon=null;a.target=null;renderAction();render();
 }
+function unstageShot(wIdx){const a=action;if(!a||a.kind!=='shoot')return;a.assignments=a.assignments.filter(as=>as.weapon!==wIdx);renderAction();render();}
+// Resolve all staged shooting assignments in rule order: all attacks vs one target before the next,
+// and same weapon-profile attacks grouped. (We group by target, then resolve each assignment.)
+function confirmShoot(){
+  const a=action;if(!a||a.kind!=='shoot'||!a.assignments.length){updateHint("No shots assigned.");return;}
+  const u=a.u;const er=inER(u);
+  // group assignments by target unit, preserving order of first appearance
+  const order=[];const byTgt={};
+  a.assignments.forEach(as=>{const w=u.ranged[as.weapon];
+    if(er&&!w.ab.pistol)return;   // in ER: only Pistols may fire
+    if(!byTgt[as.target]){byTgt[as.target]=[];order.push(as.target);}
+    byTgt[as.target].push(as);});
+  order.forEach(tid=>{const tgt=units.find(x=>x.id===tid);if(!tgt)return;
+    // same-profile grouping: sort this target's weapons by name so identical profiles resolve together
+    byTgt[tid].sort((p,q)=>u.ranged[p.weapon].name.localeCompare(u.ranged[q.weapon].name));
+    byTgt[tid].forEach(as=>{const w=u.ranged[as.weapon];
+      if(tgt.dead)return;            // target may have been destroyed by earlier weapons
+      resolveAttacks(u,tgt,w,u.models,false);u.shotWith.push(as.weapon);});
+  });
+  scoreObjectivesLive();
+  action=null;showActionPanel(false);renderAll();render();updateHint();
+}
+function rollShoot(){confirmShoot();}   // kept for the existing Roll-button wiring
 
 /* ---- CHARGE: select a legal target, then roll 2D6 ---- */
 function beginChargeSelection(u){
@@ -2390,17 +2419,32 @@ function beginChargeSelection(u){
   // Only units that can FLY may select an AIRCRAFT as a charge target.
   const targets=units.filter(e=>!e.dead&&e.player!==turn&&dist(u,e)<=12&&!segBlocked(u.hx,u.hy,e.hx,e.hy)&&(!isAircraft(e)||unitCanFly(u)));
   if(!targets.length){updateHint(`No eligible enemy within 12″ of ${u.name}.`);return;}
-  action={kind:'charge',u,targets,target:null};selId=u.id;showActionPanel(true);renderAction();render();
+  action={kind:'charge',u,targets,selected:[],target:null};selId=u.id;showActionPanel(true);renderAction();render();
 }
-function chargePickTarget(t){if(action&&action.kind==='charge'){action.target=t.id;renderAction();render();}}
-function rollCharge(){
-  const a=action;const u=a.u;const tgt=units.find(x=>x.id===a.target);if(!tgt)return;
-  const need=Math.max(0,dist(u,tgt)-ENGAGE_IN);const r1=d6(),r2=d6(),roll=r1+r2;
-  log("",`${u.name} charges ${tgt.name}: 2D6 = <b>${roll}″</b> (need ${need.toFixed(1)}″)`);logDice([{v:r1},{v:r2}]);
-  if(roll>=need){moveAdjacent(u,tgt);u.charged=true;log("save","&nbsp;&nbsp;Charge SUCCESS — Fights First.");}
-  else log("miss","&nbsp;&nbsp;Charge failed.");
+// toggle a target in/out of the declared charge set (Charge rules allow one OR MORE targets within 12")
+function chargePickTarget(t){
+  const a=action;if(!a||a.kind!=='charge')return;
+  if(a.selected.includes(t.id))a.selected=a.selected.filter(id=>id!==t.id);
+  else a.selected.push(t.id);
+  a.target=a.selected[a.selected.length-1]||null;
+  renderAction();render();
+}
+function confirmCharge(){
+  const a=action;const u=a.u;if(!a.selected.length){updateHint("Declare at least one charge target.");return;}
+  const tgts=a.selected.map(id=>units.find(x=>x.id===id)).filter(t=>t&&!t.dead);
+  if(!tgts.length){action=null;showActionPanel(false);render();return;}
+  // 2D6 charge roll; must be enough to reach Engagement Range of EVERY declared target
+  const r1=d6(),r2=d6(),roll=r1+r2;
+  const need=Math.max.apply(null,tgts.map(t=>Math.max(0,dist(u,t)-ENGAGE_IN)));
+  log("",`${u.name} charges ${tgts.map(t=>t.name).join(', ')}: 2D6 = <b>${roll}″</b> (need ${need.toFixed(1)}″ to reach all)`);logDice([{v:r1},{v:r2}]);
+  if(roll>=need){
+    // move toward the nearest declared target (single-anchor abstraction); Fights First via charged flag
+    let nearest=tgts[0],nd=dist(u,tgts[0]);tgts.forEach(t=>{const d=dist(u,t);if(d<nd){nd=d;nearest=t;}});
+    moveAdjacent(u,nearest);u.charged=true;log("save","&nbsp;&nbsp;Charge SUCCESS — Fights First.");
+  }else log("miss","&nbsp;&nbsp;Charge failed — no models move.");
   action=null;showActionPanel(false);render();renderAll();updateHint();
 }
+function rollCharge(){confirmCharge();}   // kept for the existing Roll-button wiring
 function moveAdjacent(u,tgt){
   const dx=Math.sign(tgt.hx-u.hx),dy=Math.sign(tgt.hy-u.hy);
   let nx=clamp(tgt.hx-dx,0,GW-1),ny=clamp(tgt.hy-dy,0,GH-1);
@@ -2483,19 +2527,43 @@ function beginFightSelection(u){
   if(!u.melee.length){updateHint(`${u.name} has no melee weapons.`);return;}
   if(pileInMove(u))log("",`${u.name} piles in.`);          // 1. Pile In (3" toward closest enemy)
   const targets=units.filter(e=>!e.dead&&e.player!==u.player&&engaged(u,e));
-  if(!targets.length)return;
-  action={kind:'fight',u,targets,target:targets[0].id};selId=u.id;showActionPanel(true);renderAction();render();
+  if(!targets.length){updateHint(`${u.name} has no enemies in Engagement Range after pile-in.`);return;}
+  // staged: declare target(s) + melee weapon; the engine allocates models via meleeTargetSplit on confirm.
+  action={kind:'fight',u,targets,selected:[],weapon:0,target:null};selId=u.id;showActionPanel(true);renderAction();render();
 }
-function fightPickTarget(t){if(action&&action.kind==='fight'){action.target=t.id;renderAction();render();}}
-function rollFight(){
-  const a=action;const u=a.u;const tgt=units.find(x=>x.id===a.target);if(!tgt)return;
+function fightPickTarget(t){
+  const a=action;if(!a||a.kind!=='fight')return;
+  if(a.selected.includes(t.id))a.selected=a.selected.filter(id=>id!==t.id);
+  else a.selected.push(t.id);
+  a.target=a.selected[a.selected.length-1]||null;
+  renderAction();render();
+}
+function fightPickWeapon(idx){if(action&&action.kind==='fight'){action.weapon=idx;renderAction();render();}}
+function confirmFight(){
+  const a=action;const u=a.u;
   if(u.charged)log("sys",`${u.name} (charged — fights first)`);
-  resolveAttacks(u,tgt,u.melee[0],u.models,false);
+  const w=u.melee[a.weapon]||u.melee[0];
+  // 2. Make melee attacks. If the player declared specific targets, split models across them via the engine's
+  //    per-model allocation; else auto-split to all engaged foes. Resolve all attacks vs one target before the
+  //    next (loop order), accounting for mid-sequence deaths.
+  let split=meleeTargetSplit(u);
+  if(a.selected.length){
+    const want=new Set(a.selected);
+    const chosen=split.filter(s=>want.has(s.enemy.id));
+    split = chosen.length?chosen:split;   // fall back to auto if declared targets aren't reachable
+  }
+  if(!split.length){ // no reachable foe — still allow consolidate
+    if(!u.dead&&consolidateMove(u))log("",`${u.name} consolidates.`);
+    u.fought=true;action=null;showActionPanel(false);render();renderAll();updateHint();return;
+  }
+  split.forEach(s=>{const tgt=units.find(x=>x.id===s.enemy.id);if(!tgt||tgt.dead)return;
+    resolveAttacks(u,tgt,w,s.nModels,false);});
   u.fought=true;
   if(!u.dead&&consolidateMove(u))log("",`${u.name} consolidates.`);   // 3. Consolidate
   scoreObjectivesLive();
   action=null;showActionPanel(false);render();renderAll();updateHint();
 }
+function rollFight(){confirmFight();}   // kept for the existing Roll-button wiring
 
 /* ---- hatchway operation on ending movement ---- */
 function operateHatchways(){
@@ -3729,27 +3797,56 @@ function renderAction(){
        <button class="btn apCancel" id="apCancelBtn">Cancel</button>`;
   }else if(a.kind==='shoot'){
     h=`<div class="apTitle">SHOOT — ${a.u.name}</div>`;
-    h+=`<div class="apSub">1 · Pick a weapon</div><div class="apWpns">`;
-    a.u.ranged.forEach((w,i)=>{const used=a.u.shotWith.includes(i);
-      h+=`<button class="apWpn${a.weapon===i?' sel':''}${used?' used':''}" data-w="${i}">${w.name}<span>${w.rng}" A${w.a} ${w.skill}+ S${w.s} AP${w.ap} D${w.d}${abShort(w)}</span></button>`;});
+    // staged assignments summary
+    if(a.assignments&&a.assignments.length){
+      h+=`<div class="apSub">Assigned shots</div><div class="apTargets">`;
+      a.assignments.forEach(as=>{const w=a.u.ranged[as.weapon];const t=units.find(x=>x.id===as.target);
+        h+=`<button class="apTgt sel" data-unstage="${as.weapon}">${w.name} → ${t?t.name:'?'} <span>tap to remove</span></button>`;});
+      h+=`</div>`;
+    }
+    h+=`<div class="apSub">Pick a weapon, then a target</div><div class="apWpns">`;
+    a.u.ranged.forEach((w,i)=>{const assigned=a.assignments&&a.assignments.some(as=>as.weapon===i);
+      h+=`<button class="apWpn${a.weapon===i?' sel':''}${assigned?' used':''}" data-w="${i}">${w.name}<span>${w.rng}" A${w.a} ${w.skill}+ S${w.s} AP${w.ap} D${w.d}${abShort(w)}</span></button>`;});
     h+=`</div>`;
     if(a.weapon!=null){
       const w=a.u.ranged[a.weapon];
       const er=inER(a.u);
       let tg=units.filter(e=>!e.dead&&e.player!==a.u.player&&dist(a.u,e)<=w.rng&&visible(a.u,e));
-      tg=tg.filter(e=>!unitIsLoneOp(e)||dist(a.u,e)<=12);   // Lone Operative: only targetable from within 12"
+      tg=tg.filter(e=>!unitIsLoneOp(e)||dist(a.u,e)<=12);
       if(er)tg=tg.filter(e=>engaged(a.u,e));
-      h+=`<div class="apSub">2 · Pick a target (in range &amp; sight)</div>`;
-      if(!tg.length)h+=`<p class="apNote">No valid target for this weapon.</p>`;
-      else{h+=`<div class="apTargets">`;tg.forEach(t=>{h+=`<button class="apTgt${a.target===t.id?' sel':''}" data-t="${t.id}">${t.name} <span>${dist(a.u,t).toFixed(0)}″ · T${t.t} Sv${t.sv}+</span></button>`;});h+=`</div>`;}
-      if(a.target)h+=`<button class="btn primary apRoll" id="apRollBtn">🎲 Roll Attacks</button>`;
+      h+=`<div class="apSub">Target for ${w.name} (in range &amp; sight)</div>`;
+      if(er&&!w.ab.pistol)h+=`<p class="apNote">In Engagement Range — only Pistols may fire this weapon.</p>`;
+      else if(!tg.length)h+=`<p class="apNote">No valid target for this weapon.</p>`;
+      else{h+=`<div class="apTargets">`;tg.forEach(t=>{h+=`<button class="apTgt" data-t="${t.id}">${t.name} <span>${dist(a.u,t).toFixed(0)}″ · T${t.t} Sv${t.sv}+</span></button>`;});h+=`</div>`;}
     }
+    if(a.assignments&&a.assignments.length)h+=`<button class="btn primary apRoll" id="apConfirmShootBtn">🎲 Resolve ${a.assignments.length} shot${a.assignments.length>1?'s':''}</button>`;
     h+=`<button class="btn apCancel" id="apCancelBtn">Done shooting</button>`;
   }else if(a.kind==='charge'){
-    h=`<div class="apTitle">CHARGE — ${a.u.name}</div><div class="apSub">1 · Select a target within 12″</div><div class="apTargets">`;
-    a.targets.forEach(t=>{h+=`<button class="apTgt${a.target===t.id?' sel':''}" data-t="${t.id}">${t.name} <span>${dist(a.u,t).toFixed(1)}″ · need ${Math.max(0,dist(a.u,t)-ENGAGE_IN).toFixed(1)}″</span></button>`;});
+    h=`<div class="apTitle">CHARGE — ${a.u.name}</div><div class="apSub">Declare one or more targets within 12″ (tap to toggle)</div><div class="apTargets">`;
+    a.targets.forEach(t=>{const sel=a.selected.includes(t.id);
+      h+=`<button class="apTgt${sel?' sel':''}" data-t="${t.id}">${sel?'✓ ':''}${t.name} <span>${dist(a.u,t).toFixed(1)}″ · need ${Math.max(0,dist(a.u,t)-ENGAGE_IN).toFixed(1)}″</span></button>`;});
     h+=`</div>`;
-    if(a.target)h+=`<button class="btn primary apRoll" id="apRollBtn">🎲 Roll 2D6 Charge</button>`;
+    if(a.selected.length){
+      const tgts=a.selected.map(id=>units.find(x=>x.id===id)).filter(Boolean);
+      const need=Math.max.apply(null,tgts.map(t=>Math.max(0,dist(a.u,t)-ENGAGE_IN)));
+      h+=`<div class="apSub">Need <b>${need.toFixed(1)}″</b> to reach all ${tgts.length} target${tgts.length>1?'s':''}</div>`;
+      h+=`<button class="btn primary apRoll" id="apConfirmChargeBtn">🎲 Roll 2D6 Charge</button>`;
+    }
+    h+=`<button class="btn apCancel" id="apCancelBtn">Cancel</button>`;
+  }else if(a.kind==='fight'){
+    h=`<div class="apTitle">FIGHT — ${a.u.name}</div>`;
+    if(a.u.charged)h+=`<p class="apNote">Charged this turn — Fights First.</p>`;
+    if(a.u.melee.length>1){
+      h+=`<div class="apSub">Melee weapon</div><div class="apWpns">`;
+      a.u.melee.forEach((w,i)=>{h+=`<button class="apWpn${a.weapon===i?' sel':''}" data-fw="${i}">${w.name}<span>A${w.a} ${w.skill}+ S${w.s} AP${w.ap} D${w.d}${abShort(w)}</span></button>`;});
+      h+=`</div>`;
+    }
+    h+=`<div class="apSub">Declare target(s) in Engagement Range (tap to toggle)</div><div class="apTargets">`;
+    a.targets.forEach(t=>{const sel=a.selected.includes(t.id);
+      h+=`<button class="apTgt${sel?' sel':''}" data-t="${t.id}">${sel?'✓ ':''}${t.name} <span>${dist(a.u,t).toFixed(1)}″ · T${t.t} Sv${t.sv}+</span></button>`;});
+    h+=`</div>`;
+    h+=`<p class="apNote">${a.selected.length?'Attacks split across declared targets.':'No target selected → auto-split to all engaged foes.'}</p>`;
+    h+=`<button class="btn primary apRoll" id="apConfirmFightBtn">🎲 Resolve melee</button>`;
     h+=`<button class="btn apCancel" id="apCancelBtn">Cancel</button>`;
   }else if(a.kind==='oath'){
     const enemies=units.filter(u=>u.player!==turn&&!u.dead);
@@ -3778,10 +3875,15 @@ function renderAction(){
   host.innerHTML=h;
   // wire
   host.querySelectorAll('.apWpn').forEach(b=>b.onclick=()=>shootPickWeapon(+b.dataset.w));
+  host.querySelectorAll('[data-unstage]').forEach(b=>b.onclick=()=>unstageShot(+b.dataset.unstage));
+  const csb=$('apConfirmShootBtn');if(csb)csb.onclick=()=>confirmShoot();
+  const ccb=$('apConfirmChargeBtn');if(ccb)ccb.onclick=()=>confirmCharge();
+  host.querySelectorAll('[data-fw]').forEach(b=>b.onclick=()=>fightPickWeapon(+b.dataset.fw));
+  const cfb=$('apConfirmFightBtn');if(cfb)cfb.onclick=()=>confirmFight();
   host.querySelectorAll('[data-oath]').forEach(b=>b.onclick=()=>chooseOath(b.dataset.oath));
   host.querySelectorAll('[data-doc]').forEach(b=>b.onclick=()=>chooseDoctrine(b.dataset.doc));
   host.querySelectorAll('[data-strat]').forEach(b=>b.onclick=()=>{const u=units.find(x=>x.id===b.dataset.strat);commitStratagem(turn,action.s,u);});
-  host.querySelectorAll('.apTgt').forEach(b=>{if(b.dataset.oath||b.dataset.doc||b.dataset.strat)return;b.onclick=()=>{const t=units.find(u=>u.id===b.dataset.t);
+  host.querySelectorAll('.apTgt').forEach(b=>{if(b.dataset.oath||b.dataset.doc||b.dataset.strat||b.dataset.unstage)return;b.onclick=()=>{const t=units.find(u=>u.id===b.dataset.t);
     if(a.kind==='shoot')shootPickTarget(t);else if(a.kind==='charge')chargePickTarget(t);else if(a.kind==='fight')fightPickTarget(t);};});
   const dsb=$('apSkipDsBtn');if(dsb)dsb.onclick=()=>{action=null;showActionPanel(false);updateHint("Reserves held back.");renderAll();render();renderStratPanel();};
   const rb=$('apRollBtn');if(rb)rb.onclick=()=>{if(a.kind==='advance')rollAdvance();else if(a.kind==='shoot')rollShoot();else if(a.kind==='charge')rollCharge();else if(a.kind==='fight')rollFight();};

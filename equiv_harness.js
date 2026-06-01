@@ -703,6 +703,35 @@ const SCENARIOS = {
     globalThis.__result={placedOrDead, tookEmergencyMortals, bshock, enclosedDestroyed};
   `,
 
+  // 30. Per-model cluster spread + per-model engagement + fight staging. Pins two fixes the finer grid
+  //     exposed: (a) a 10-model unit's models occupy DISTINCT positions with the centroid still on the
+  //     anchor (no collapse); (b) engaged() is per-model so a spread unit engages foes its edge models
+  //     reach; (c) staged fight auto-splits across multiple engaged foes.
+  fight_cluster: `
+    mode='open';GW=48;GH=44;PNAME={1:'A',2:'B'};objectives=[];walls=[];hatchways=[];turn=1;phaseIdx=4;
+    TEMPLATES.brawler={name:'Brawler',kw:['INFANTRY'],allKw:['INFANTRY'],pts:90,m:6,t:4,sv:4,inv:0,w:1,ld:6,oc:1,ranged:[],melee:[{name:'fists',type:'M',rng:0,a:4,skill:2,s:9,ap:-3,d:2,ab:{}}],models:10,abilities:[]};
+    TEMPLATES.foe={name:'Foe',kw:['INFANTRY'],allKw:['INFANTRY'],pts:80,m:6,t:4,sv:7,inv:0,w:1,ld:6,oc:1,ranged:[],melee:[],models:6,abilities:[]};
+    FACTIONS.a={name:'A',units:['brawler']};FACTIONS.b={name:'B',units:['foe']};pFaction[1]='a';pFaction[2]='b';
+    // (a) cluster spread + centroid preserved
+    var u=newUnit('brawler',1);u.deployed=true;u.hx=20;u.hy=20;syncModelPos(u);
+    var distinct=new Set(u.modelPos.map(p=>p.hx.toFixed(2)+','+p.hy.toFixed(2))).size;
+    var ca=unitAnchor(u); var centroidOnAnchor=(Math.abs(ca.hx-20)<1e-6&&Math.abs(ca.hy-20)<1e-6);
+    // (b) per-model engagement: a foe whose anchor is >ER from the cluster centroid but reachable by edge models
+    var e1=newUnit('foe',2);e1.deployed=true;e1.hx=24;e1.hy=20;syncModelPos(e1);   // ~4" from centroid, < edge reach
+    units.length=0;units.push(u,e1);
+    var perModelEngaged=engaged(u,e1);
+    // (c) staged fight auto-split hits foes (force hits via seeded RNG; unsaveable foe so damage shows)
+    var _save=Math.random; var seed=12345; Math.random=function(){seed=(seed*1103515245+12345)&0x7fffffff;return seed/0x7fffffff;};
+    var e2=newUnit('foe',2);e2.deployed=true;e2.hx=16;e2.hy=20;syncModelPos(e2);units.push(e2);
+    var b1=e1.models,b2=e2.models;
+    beginFightSelection(u); var staged=(action&&action.kind==='fight');
+    if(staged)confirmFight();
+    var foughtAndCleared=(u.fought===true&&action===null);
+    var someFoeHit=(e1.dead||e1.models<b1||e2.dead||e2.models<b2);
+    Math.random=_save;
+    globalThis.__result={tenDistinct:(distinct===10), centroidOnAnchor, perModelEngaged, staged, foughtAndCleared, someFoeHit};
+  `,
+
   // 23. Plasmacyte (Necron Destroyer Cult): floor(models/3) tokens granted at battle start; spending one
   //     when the unit fights gives its melee [DEVASTATING WOUNDS] for that fight; token consumed; no leak.
   plasmacyte: `

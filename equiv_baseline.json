@@ -327,6 +327,25 @@
       "cohCells": 2
     }
   },
+  "deadly_demise": {
+    "ok": true,
+    "result": {
+      "nearHit": true,
+      "farSafe": true,
+      "unknownNoDamage": true,
+      "nonSixNoDamage": true,
+      "guardSet": true
+    }
+  },
+  "emergency_disembark": {
+    "ok": true,
+    "result": {
+      "placedOrDead": true,
+      "tookEmergencyMortals": true,
+      "bshock": true,
+      "enclosedDestroyed": true
+    }
+  },
   "plasmacyte": {
     "ok": true,
     "result": {

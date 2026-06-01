@@ -637,6 +637,72 @@ const SCENARIOS = {
     globalThis.__result={hexInch:hexInch, boardDoubled:(GW===48&&GH===44), move6OK:move6OK, move7NotNormal:move7NotNormal, cohCells:COH_CELLS};
   `,
 
+  // 28. Deadly Demise x: on a 6 when destroyed, each unit within 6" takes x mortal wounds (random rolled
+  //     per unit); '?' magnitude (data-blocked) inflicts nothing; units beyond 6" are safe; fires once.
+  deadly_demise: `
+    mode='open';GW=48;GH=44;PNAME={1:'A',2:'B'};objectives=[];walls=[];hatchways=[];turn=1;
+    TEMPLATES.tank={name:'Tank',kw:['VEHICLE'],allKw:['VEHICLE'],pts:150,m:10,t:9,sv:3,inv:0,w:10,ld:6,oc:0,ranged:[],melee:[],models:1,abilities:[]};
+    TEMPLATES.vic={name:'Vic',kw:['INFANTRY'],allKw:['INFANTRY'],pts:60,m:6,t:4,sv:5,inv:0,w:2,ld:6,oc:1,ranged:[],melee:[],models:6,abilities:[]};
+    FACTIONS.a={name:'A',units:['tank']};FACTIONS.b={name:'B',units:['vic']};pFaction[1]='a';pFaction[2]='b';
+    function setup(dd){var tank=newUnit('tank',1);tank._deadlyDemise=dd;tank.deployed=true;tank.hx=20;tank.hy=20;syncModelPos(tank);
+      var near=newUnit('vic',2);near.deployed=true;near.hx=23;near.hy=20;syncModelPos(near);   // 3" away
+      var far=newUnit('vic',2);far.deployed=true;far.hx=30;far.hy=20;syncModelPos(far);        // 10" away
+      units.length=0;units.push(tank,near,far);return {tank,near,far};}
+    // forced 6 (Math.random=0.99 -> d6=6), DD=3: near hit, far untouched
+    var _savedRng=Math.random; Math.random=function(){return 0.99;};
+    var g=setup(3); var nb=g.near.models, fb=g.far.models;
+    deadlyDemiseCheck(g.tank);
+    var nearHit=(g.near.dead||g.near.models<nb), farSafe=(g.far.models===fb);
+    // '?' magnitude: 6 rolled but no damage
+    var gq=setup('?'); var nbq=gq.near.models; deadlyDemiseCheck(gq.tank); var unknownNoDamage=(gq.near.models===nbq);
+    // non-6 (Math.random=0): no detonation; guard set
+    Math.random=function(){return 0.0;};
+    var gn=setup(3); var nbn=gn.near.models; deadlyDemiseCheck(gn.tank); var nonSixNoDamage=(gn.near.models===nbn), guardSet=(gn.tank._demiseDone===true);
+    Math.random=_savedRng;
+    globalThis.__result={nearHit, farSafe, unknownNoDamage, nonSixNoDamage, guardSet};
+  `,
+
+  // 29. Emergency Disembarkation: if a unit can't be placed wholly within 3" of the destroyed transport (and
+  //     clear of Engagement Range), it uses the 6" ring instead and takes a mortal on each 1-3 (not just 1);
+  //     if it still can't be placed, it's destroyed. Forced 1-3 rolls via Math.random to make damage occur.
+  emergency_disembark: `
+    mode='open';GW=48;GH=44;PNAME={1:'A',2:'B'};objectives=[];walls=[];hatchways=[];turn=1;round=1;
+    TEMPLATES.rhino={name:'Rhino',kw:['VEHICLE','TRANSPORT'],allKw:['VEHICLE','TRANSPORT'],pts:75,m:12,t:9,sv:3,inv:0,w:10,ld:6,oc:2,ranged:[],melee:[],models:1,transportCapacity:10,abilities:[]};
+    TEMPLATES.squad={name:'Squad',kw:['INFANTRY'],allKw:['INFANTRY'],pts:90,m:6,t:4,sv:4,inv:0,w:1,ld:6,oc:1,ranged:[],melee:[],models:5,abilities:[]};
+    TEMPLATES.foe={name:'Foe',kw:['INFANTRY'],allKw:['INFANTRY'],pts:80,m:6,t:4,sv:4,inv:0,w:1,ld:6,oc:1,ranged:[],melee:[],models:5,abilities:[]};
+    FACTIONS.a={name:'A',units:['rhino','squad'],color:'imp'};FACTIONS.b={name:'B',units:['foe'],color:'xenos'};
+    pFaction[1]='a';pFaction[2]='b';
+
+    // ring enemies ~3" around the transport so the 3" disembark ring is all within Engagement Range -> forces
+    // the 6" emergency ring. (At 1"/cell, place foes 3 cells out on the 4 diagonals/orthogonals.)
+    var _save=Math.random; Math.random=function(){return 0.1;};   // d6 -> 1 (a 1-3 result => emergency mortal)
+    var tr=newUnit('rhino',1);tr.deployed=true;tr.hx=24;tr.hy=22;syncModelPos(tr);
+    var sq=newUnit('squad',1);sq.deployed=true;sq.hx=25;sq.hy=22;syncModelPos(sq);
+    units.length=0;units.push(tr,sq);
+    embarkUnit(sq,tr);
+    // surround at 3 cells (=3") in 8 directions to block the 3" ring with Engagement Range
+    [[3,0],[-3,0],[0,3],[0,-3],[2,2],[-2,2],[2,-2],[-2,-2]].forEach((d,i)=>{var f=newUnit('foe',2);f.deployed=true;f.hx=tr.hx+d[0];f.hy=tr.hy+d[1];syncModelPos(f);units.push(f);});
+    sq._embarkedIn=tr.id;sq.deployed=false;sq.bshock=false;
+    var before=sq.models;
+    destroyedTransportDisembark(tr);
+    // expect: placed on the 6" ring (deployed) OR destroyed; battle-shocked; took mortal(s) from the 1-3 rolls
+    var placedOrDead=(sq._embarkedIn===null && (sq.deployed===true||sq.dead===true));
+    var tookEmergencyMortals=(sq.dead||sq.models<before);
+    var bshock=(sq.dead||sq.bshock===true);
+
+    // fully enclosed: a transport boxed in by enemies at every range -> unit cannot be placed -> destroyed
+    var tr2=newUnit('rhino',1);tr2.deployed=true;tr2.hx=5;tr2.hy=5;syncModelPos(tr2);
+    var sq2=newUnit('squad',1);sq2.deployed=true;sq2.hx=6;sq2.hy=5;syncModelPos(sq2);units.push(tr2,sq2);
+    embarkUnit(sq2,tr2);sq2._embarkedIn=tr2.id;sq2.deployed=false;
+    // flood the whole 6" neighbourhood with enemies (within ER of every candidate cell)
+    for(var dx=-7;dx<=7;dx++)for(var dy=-7;dy<=7;dy++){if(!dx&&!dy)continue;var fx=tr2.hx+dx,fy=tr2.hy+dy;if(fx<0||fy<0||fx>=GW||fy>=GH)continue;var f=newUnit('foe',2);f.deployed=true;f.hx=fx;f.hy=fy;f.models=1;syncModelPos(f);units.push(f);}
+    destroyedTransportDisembark(tr2);
+    var enclosedDestroyed=(sq2.dead===true);
+
+    Math.random=_save;
+    globalThis.__result={placedOrDead, tookEmergencyMortals, bshock, enclosedDestroyed};
+  `,
+
   // 23. Plasmacyte (Necron Destroyer Cult): floor(models/3) tokens granted at battle start; spending one
   //     when the unit fights gives its melee [DEVASTATING WOUNDS] for that fight; token consumed; no leak.
   plasmacyte: `

@@ -1022,6 +1022,18 @@ function buildFromCSV(tables){
   const facName={};Factions.forEach(f=>facName[f.id]=f.name);
   const abilityById={};(Abilities||[]).forEach(a=>abilityById[a.id]={name:a.name,desc:stripHtml(a.description||a.legend||''),type:'Core'});
   const byDs=arr=>{const m={};(arr||[]).forEach(r=>{(m[r.datasheet_id]=m[r.datasheet_id]||[]).push(r);});return m;};
+  // Parse a base size in mm from a string like "32mm", "⌀ 40 mm", "120 x 92mm" (oval -> larger dim), or a
+  // model name carrying a "(⌀32mm)" suffix. Returns a number (largest dimension in mm) or 0 if none found.
+  function parseBaseMm(str){
+    if(!str)return 0; const t=String(str);
+    // capture all "<n>mm" occurrences (handles "120 x 92mm" and "⌀32mm"); take the max
+    const nums=[]; let m; const re=/(\d+(?:\.\d+)?)\s*mm/gi;
+    while((m=re.exec(t))!==null)nums.push(parseFloat(m[1]));
+    // also "120 x 92" without a trailing mm on the first number
+    const ov=t.match(/(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)/i);
+    if(ov){nums.push(parseFloat(ov[1]),parseFloat(ov[2]));}
+    return nums.length?Math.max.apply(null,nums):0;
+  }
   const models=byDs(Datasheets_models), wargear=byDs(Datasheets_wargear),
         costs=byDs(Datasheets_models_cost), kws=byDs(Datasheets_keywords), dsAb=byDs(Datasheets_abilities),
         opts=byDs(Datasheets_options);
@@ -1077,11 +1089,26 @@ function buildFromCSV(tables){
         firingDeck=Math.max(firingDeck, fm?toInt(fm[1],2):2);   // present-but-unnumbered -> default 2
       }
     });
+    // Deadly Demise x: on a 6 when destroyed, each unit within 6" takes x mortal wounds. The export usually
+    // carries only the generic glossary 'x', so capture an explicit magnitude (number or D3/D6) when present,
+    // else mark '?' = "has Deadly Demise, magnitude unknown" (xvalues.js supplies the real X; '?' inflicts nothing).
+    let deadlyDemise=null;
+    abilities.forEach(a=>{
+      const blob=String(a.name+' '+(a.desc||''));
+      if(/deadly demise/i.test(blob)){
+        const dm=blob.match(/deadly demise\s*['\u2018\u2019]?\s*(d3|d6|\d+)/i);
+        deadlyDemise = dm ? (/d/i.test(dm[1])?dm[1].toUpperCase():toInt(dm[1],0)) : '?';
+      }
+    });
+    // Base size (mm): Wahapedia's Datasheets_models carries a `base_size` field (e.g. "32mm", "40mm",
+    // "120 x 92mm" oval, or with the ⌀ symbol). Parse the largest dimension in mm; fall back to the
+    // model name's "(⌀ x mm)" suffix; null if absent (renderer then uses the keyword default).
+    let baseMm=parseBaseMm(lead&&lead.base_size) || parseBaseMm(lead&&lead.name) || parseBaseMm(ds.name);
     newTpl[key]={name:ds.name,kw:kwList.length?kwList:["INFANTRY"],factionKw,allKw:allKwUpper,pts:pts||0,role:ds.role||'',
       m,t,sv,inv,w,ld,oc,models:modelCount,
       ranged,melee:melee.length?melee:[W("Close combat weapon","M",0,1,4,t,0,1)],
       abilities,
-      transportCapacity:capacity, firingDeck:firingDeck,
+      transportCapacity:capacity, firingDeck:firingDeck, deadlyDemise:deadlyDemise, baseMm:baseMm,
       loadout:parseLoadoutOptions(opts[ds.id])};
     (facUnits[ds.faction_id]=facUnits[ds.faction_id]||[]).push(key);
   });
@@ -1428,7 +1455,7 @@ function newUnit(tplKey,player){
     inReserve:false,_reserveRound:0,_setupThisTurn:false,_arriveExtraMove:null,
     _plasmacytes:0,
     facing:null,   // heading in degrees (0=east, 90=south on screen y-down); null = no facing tracked. Pass A: written on move, read by nothing yet.
-    _capacity:(t.transportCapacity||0),_firingDeck:(t.firingDeck||0),_embarkedIn:null,_embarked:[],_disembarkedThisTurn:false,
+    _capacity:(t.transportCapacity||0),_firingDeck:(t.firingDeck||0),_deadlyDemise:(t.deadlyDemise!=null?t.deadlyDemise:null),_baseMm:(t.baseMm||0),_embarkedIn:null,_embarked:[],_disembarkedThisTurn:false,
     shotWith:[],bshock:false,dead:false,_stratAtk:[],_stratDef:[],_ocBonus:0,_ocMult:1,_orderMove:0,_orderOc:0,_orderLd:0};
 }
 function totalWounds(u){return (u.models-1)*u.w+u.woundsLeft;}
@@ -1469,7 +1496,7 @@ function syncModelPos(u){
   const out=[];
   for(let i=0;i<n;i++){
     const off=_CLUSTER_OFFSETS[i%_CLUSTER_OFFSETS.length];
-    out.push({hx:clamp(u.hx+off[0],0,GW-1),hy:clamp(u.hy+off[1],0,GH-1)});
+    out.push({hx:clampf(u.hx+off[0],0,GW-1),hy:clampf(u.hy+off[1],0,GH-1)});
   }
   // re-centre so the centroid lands exactly on the token (clamping at board edges could skew it);
   // if the centroid drifted, fall back to all-models-on-anchor to preserve unitAnchor()==token.
@@ -1516,13 +1543,27 @@ function recenterToken(u){
   u.hx=Math.round(sx/u.modelPos.length);
   u.hy=Math.round(sy/u.modelPos.length);
 }
+// Place a unit's models evenly along a line from (ax,ay) to (bx,by) in cell coords, float-precise.
+// Spacing auto-fits the model count; used by the setup->confirm placement UI. Re-derives the token.
+function placeModelsLine(u,ax,ay,bx,by){
+  if(!u||!u.modelPos)syncModelPos(u);
+  const n=Math.max(1,u.models|0);
+  const out=[];
+  if(n===1){ out.push({hx:clampf(ax,0,GW-1),hy:clampf(ay,0,GH-1)}); }
+  else for(let i=0;i<n;i++){ const t=i/(n-1);
+    out.push({hx:clampf(ax+(bx-ax)*t,0,GW-1),hy:clampf(ay+(by-ay)*t,0,GH-1)}); }
+  u.modelPos=out; recenterToken(u);
+  return out;
+}
 // Move a single model (by index) to a new cell, then re-derive the token. The primitive the capability
 // layer (coherency, multi-target melee, spreading) will build on. No-op if index/unit invalid.
 function moveModel(u,i,hx,hy){
   if(!u||!u.modelPos||i<0||i>=u.modelPos.length)return;
-  u.modelPos[i]={hx:clamp(hx,0,GW-1),hy:clamp(hy,0,GH-1)};
+  u.modelPos[i]={hx:clampf(hx,0,GW-1),hy:clampf(hy,0,GH-1)};   // float-precise (free placement)
   recenterToken(u);
 }
+// float clamp (positions are continuous; only the derived token is rounded, in recenterToken)
+function clampf(v,lo,hi){return v<lo?lo:(v>hi?hi:v);}
 /* ---- Unit Coherency (capability layer) -------------------------------------------------------
    Core Rules: a unit of 2-6 models must have every model within 2" of at least ONE other model;
    a unit of 7+ models within 2" of at least TWO others. On this board 1 cell = 2" (HEX_INCH), and
@@ -1628,7 +1669,7 @@ function buildBattle(){
   const M=MODES[mode];
   if(mode==='sandbox'){GW=clamp(Math.round(customW*_RES),Math.round(12*_RES),Math.round(40*_RES));GH=clamp(Math.round(customH*_RES),Math.round(10*_RES),Math.round(34*_RES));}
   else{[GW,GH]=M.grid;}
-  CELL=Math.floor(Math.min(760/GW,660/GH));CELL=clamp(CELL,16,34);
+  CELL=Math.floor(Math.min(900/GW,720/GH));CELL=clamp(CELL,12,34);
   cv.width=GW*CELL;cv.height=GH*CELL;
   units=[];objectives=[];walls=[];hatchways=[];
   vp={1:0,2:0};cp={1:1,2:1};round=1;turn=1;phaseIdx=0;selId=null;action=null;
@@ -1952,7 +1993,7 @@ function applyDamage(u,normalDamage,dPerHit,mortal,silent,fnp){
   const lost=before-totalWounds(u);
   if(u.modelPos)syncModelPos(u);
   if(silent)return;
-  if(u.dead){if(u._embarked||isTransport(u)){const pax=units.filter(z=>!z.dead&&z._embarkedIn===u.id);if(pax.length)destroyedTransportDisembark(u);}log("kill",`&nbsp;&nbsp;☠ ${u.name} DESTROYED!`);cultAmbushResurrect(u);painOnEnemyDeath(u);ypOnEnemyDeath(u);ecOnEnemyDeath(u,units.find(x=>x.id===selId&&x.player!==u.player&&!x.dead));miracleOnDeath(u);}
+  if(u.dead){deadlyDemiseCheck(u);if(u._embarked||isTransport(u)){const pax=units.filter(z=>!z.dead&&z._embarkedIn===u.id);if(pax.length)destroyedTransportDisembark(u);}log("kill",`&nbsp;&nbsp;☠ ${u.name} DESTROYED!`);cultAmbushResurrect(u);painOnEnemyDeath(u);ypOnEnemyDeath(u);ecOnEnemyDeath(u,units.find(x=>x.id===selId&&x.player!==u.player&&!x.dead));miracleOnDeath(u);}
   else if(lost>0)log("",`&nbsp;&nbsp;${u.name} −<span class="kill">${lost}</span>W${fnp?' (after FNP '+fnp+'+)':''} · ${u.models} model(s) left.`);
   else log("miss",`&nbsp;&nbsp;${u.name} unharmed.`);
 }
@@ -1967,7 +2008,7 @@ function applyMortals(u,n){
   if(!u||u.dead||n<=0)return;
   dmgChunk(u,n,true);
   if(u.modelPos)syncModelPos(u);
-  if(u.dead){if(u._embarked||isTransport(u)){const pax=units.filter(z=>!z.dead&&z._embarkedIn===u.id);if(pax.length)destroyedTransportDisembark(u);}log("kill",`&nbsp;&nbsp;☠ ${u.name} DESTROYED!`);cultAmbushResurrect(u);painOnEnemyDeath(u);ypOnEnemyDeath(u);ecOnEnemyDeath(u,units.find(x=>x.id===selId&&x.player!==u.player&&!x.dead));miracleOnDeath(u);}
+  if(u.dead){deadlyDemiseCheck(u);if(u._embarked||isTransport(u)){const pax=units.filter(z=>!z.dead&&z._embarkedIn===u.id);if(pax.length)destroyedTransportDisembark(u);}log("kill",`&nbsp;&nbsp;☠ ${u.name} DESTROYED!`);cultAmbushResurrect(u);painOnEnemyDeath(u);ypOnEnemyDeath(u);ecOnEnemyDeath(u,units.find(x=>x.id===selId&&x.player!==u.player&&!x.dead));miracleOnDeath(u);}
 }
 /* Reanimation Protocols: heal up to `wounds` across the unit.
    First tops up the current wounded model, then returns destroyed models at 1W,
@@ -2558,6 +2599,29 @@ function disembarkUnit(unit,tr,hx,hy){
 /* Destroyed transport: embarked units immediately disembark; D6 per disembarking model (1 -> 1 mortal to
    that unit), unit Battle-shocked, counts as moved, cannot charge. Emergency Disembarkation (within 6",
    mortal on 1-3, unplaceable models destroyed) if 3" placement is impossible. */
+/* Deadly Demise x: when a model with this ability is destroyed, roll 1D6 BEFORE removing it (and, for a
+   TRANSPORT, before embarked models disembark). On a 6, each OTHER unit within 6" suffers x mortal wounds;
+   if x is random (D3/D6), roll separately for each affected unit. Magnitude comes from _deadlyDemise: a
+   number or 'D3'/'D6'. The '?' marker (present but magnitude unknown — data-blocked) inflicts nothing and
+   logs a note; fill the X in xvalues.js to activate. Fires at most once per unit (_demiseDone guard), so a
+   chain of demises among clustered units is naturally bounded. */
+function rollDemise(x){
+  if(x==='D3')return (Math.floor(Math.random()*3)+1)|0;     // use the engine RNG path
+  if(x==='D6')return d6();
+  const n=parseInt(x,10); return isNaN(n)?0:n;
+}
+function deadlyDemiseCheck(u){
+  if(!u||u._demiseDone)return; const x=u._deadlyDemise;
+  if(x==null)return;                                         // no Deadly Demise
+  u._demiseDone=true;
+  const r=d6();
+  if(r!==6){log("sys",`${u.name}: Deadly Demise — rolled ${r} (no detonation).`);return;}
+  if(x==='?'){log("sys",`${u.name}: Deadly Demise triggers (6) but its magnitude X is unknown — set it in xvalues.js to apply damage.`);return;}
+  const a=unitAnchor(u);
+  const victims=units.filter(e=>!e.dead&&e.id!==u.id&&rawDist(unitAnchor(e),a)<=6);   // 6" radius, all units (friend & foe)
+  log("kill",`${u.name}: Deadly Demise detonates (6)! ${victims.length} unit${victims.length===1?'':'s'} within 6″.`);
+  victims.forEach(e=>{ const n=rollDemise(x); if(n>0){log("kill",`&nbsp;&nbsp;${e.name} suffers ${n} mortal wound${n===1?'':'s'}.`); applyMortals(e,n);} });
+}
 function destroyedTransportDisembark(tr){
   const passengers=embarkedUnits(tr);
   passengers.forEach(unit=>{
@@ -2693,36 +2757,48 @@ function render(){
 
   // units
   const tgtId=action&&action.target;
-  units.forEach(u=>{if(u.dead||u.hx<0)return;const c=cellCenter(u.hx,u.hy);
+  units.forEach(u=>{if(u.dead||u.hx<0)return;
+    const mp=(u.modelPos&&u.modelPos.length)?u.modelPos:[{hx:u.hx,hy:u.hy}];
+    const a=unitAnchor(u); const cA=cellCenter(a.hx,a.hy);
     const base=u.player===1?gc('--imp'):gc('--cha');
-    // target highlight ring
-    if(u.id===tgtId){ctx.beginPath();ctx.arc(c.x,c.y,CELL*0.5,0,7);ctx.strokeStyle=gc('--blood2');ctx.lineWidth=3;ctx.setLineDash([4,3]);ctx.stroke();ctx.setLineDash([]);}
-    ctx.beginPath();ctx.arc(c.x,c.y,CELL*0.40,0,7);ctx.fillStyle=base;ctx.fill();
-    ctx.lineWidth=u.id===selId?3:1.5;ctx.strokeStyle=u.id===selId?gc('--gold2'):(u.player===1?gc('--impd'):gc('--chad'));
-    if(u.id===selId){ctx.shadowColor=gc('--gold');ctx.shadowBlur=14;}ctx.stroke();ctx.shadowBlur=0;
-    if(u.kw.includes("CHARACTER")){ctx.fillStyle=gc('--gold2');ctx.font='bold 14px Cinzel';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('✠',c.x,c.y);}
-    else{ctx.fillStyle='#fff';ctx.font='600 12px Share Tech Mono';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(u.models,c.x,c.y);}
-    const hpw=CELL*0.7,frac=totalWounds(u)/maxWounds(u);
-    ctx.fillStyle='#000';ctx.fillRect(c.x-hpw/2,c.y+CELL*0.4,hpw,3);
-    ctx.fillStyle=frac>0.5?gc('--acid'):gc('--blood2');ctx.fillRect(c.x-hpw/2,c.y+CELL*0.4,hpw*frac,3);
-    if(u.bshock){ctx.fillStyle=gc('--blood2');ctx.font='8px Share Tech Mono';ctx.fillText('SHOCK',c.x,c.y-CELL*0.42-3);}
-    // acted marker
+    const edge=u.id===selId?gc('--gold2'):(u.player===1?gc('--impd'):gc('--chad'));
+    const rPx=Math.max(4, (baseRadiusInch(u)/HEX_INCH)*CELL);   // model radius in px from base size
+    // selection halo around the whole unit
+    if(u.id===selId){ctx.beginPath();ctx.arc(cA.x,cA.y,CELL*0.6,0,7);ctx.strokeStyle=gc('--gold');ctx.globalAlpha=0.25;ctx.lineWidth=6;ctx.stroke();ctx.globalAlpha=1;}
+    if(u.id===tgtId){ctx.beginPath();ctx.arc(cA.x,cA.y,CELL*0.6,0,7);ctx.strokeStyle=gc('--blood2');ctx.lineWidth=3;ctx.setLineDash([4,3]);ctx.stroke();ctx.setLineDash([]);}
+    // each model as a disc at its float position
+    mp.forEach(p=>{const c=cellCenter(p.hx,p.hy);
+      ctx.beginPath();ctx.arc(c.x,c.y,rPx,0,7);ctx.fillStyle=base;ctx.fill();
+      ctx.lineWidth=u.id===selId?2:1.2;ctx.strokeStyle=edge;
+      if(u.id===selId){ctx.shadowColor=gc('--gold');ctx.shadowBlur=8;}ctx.stroke();ctx.shadowBlur=0;
+      if(u.facing!=null){const rad=u.facing*Math.PI/180;ctx.beginPath();ctx.moveTo(c.x,c.y);ctx.lineTo(c.x+Math.cos(rad)*rPx,c.y+Math.sin(rad)*rPx);ctx.strokeStyle=isAircraft(u)?gc('--gold'):'rgba(200,215,230,.8)';ctx.lineWidth=1.5;ctx.stroke();}
+    });
+    // CHARACTER glyph / model count on the anchor model
+    if(u.kw.includes("CHARACTER")){ctx.fillStyle=gc('--gold2');ctx.font='bold 13px Cinzel';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('✠',cA.x,cA.y);}
+    // unit label: name + model count, above the cluster
+    ctx.fillStyle=u.id===selId?gc('--gold2'):'rgba(210,220,235,.85)';ctx.font='600 9px Share Tech Mono';ctx.textAlign='center';ctx.textBaseline='alphabetic';
+    ctx.fillText(`${u.models}× ${u.name}`.slice(0,22), cA.x, cA.y-CELL*0.7);
+    // unit health bar under the cluster
+    const hpw=CELL*0.8,frac=totalWounds(u)/Math.max(1,maxWounds(u));
+    ctx.fillStyle='#000';ctx.fillRect(cA.x-hpw/2,cA.y+CELL*0.62,hpw,3);
+    ctx.fillStyle=frac>0.5?gc('--acid'):gc('--blood2');ctx.fillRect(cA.x-hpw/2,cA.y+CELL*0.62,hpw*frac,3);
+    if(u.bshock){ctx.fillStyle=gc('--blood2');ctx.font='8px Share Tech Mono';ctx.fillText('SHOCK',cA.x,cA.y-CELL*0.62-9);}
     let acted=u.player===turn&&((PHASES[phaseIdx]==="Movement"&&u.moved)||(PHASES[phaseIdx]==="Charge"&&u.charged)||(PHASES[phaseIdx]==="Fight"&&u.fought));
-    if(acted){ctx.fillStyle=gc('--dim');ctx.beginPath();ctx.arc(c.x+CELL*0.30,c.y-CELL*0.30,3,0,7);ctx.fill();}
-    // facing indicator: a short prow line from the centre in the heading direction (units that track facing)
-    if(u.facing!=null){
-      const rad=u.facing*Math.PI/180, r0=CELL*0.40, r1=CELL*0.62;
-      ctx.beginPath();ctx.moveTo(c.x+Math.cos(rad)*r0,c.y+Math.sin(rad)*r0);ctx.lineTo(c.x+Math.cos(rad)*r1,c.y+Math.sin(rad)*r1);
-      ctx.strokeStyle=isAircraft(u)?gc('--gold'):'rgba(180,200,220,.7)';ctx.lineWidth=isAircraft(u)?3:2;ctx.stroke();
-      // arrowhead
-      ctx.beginPath();ctx.moveTo(c.x+Math.cos(rad)*r1,c.y+Math.sin(rad)*r1);
-      ctx.lineTo(c.x+Math.cos(rad+2.6)*CELL*0.5,c.y+Math.sin(rad+2.6)*CELL*0.5);
-      ctx.lineTo(c.x+Math.cos(rad-2.6)*CELL*0.5,c.y+Math.sin(rad-2.6)*CELL*0.5);
-      ctx.closePath();ctx.fillStyle=isAircraft(u)?gc('--gold'):'rgba(180,200,220,.7)';ctx.fill();
-    }
+    if(acted){ctx.fillStyle=gc('--dim');ctx.beginPath();ctx.arc(cA.x+CELL*0.5,cA.y-CELL*0.5,3,0,7);ctx.fill();}
   });
   // ---- move-preview ghost + facing-toward-cursor (selected movable unit, hovering a cell) -------------
   drawMovePreview();
+}
+// Model base radius in inches. Prefers the real base size (mm) parsed from the datasheet (_baseMm),
+// converting diameter mm -> radius inches (1" = 25.4mm). Falls back to a keyword heuristic when the data
+// lacks a base size (older exports). Display + spacing only.
+function baseRadiusInch(u){
+  if(u && u._baseMm>0) return (u._baseMm/25.4)/2;
+  const kw=(u.allKw||u.kw||[]);
+  if(kw.includes('TITANIC'))return 1.6;
+  if(kw.includes('VEHICLE')||kw.includes('MONSTER'))return 1.2;
+  if(kw.includes('TERMINATOR')||kw.includes('MOUNTED')||kw.includes('BIKE'))return 0.8;
+  return 0.63;   // 32mm infantry default
 }
 /* Translucent preview at the hovered cell for the selected movable unit, plus a heading arrow from the unit
    toward the cursor (showing the direction it would face after moving). Pure render; reads hoverHx/hoverHy. */

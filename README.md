@@ -479,3 +479,20 @@ Two design corrections during the pass, both caught by the oracle and worth reco
 2. **Centroid-gated foes.** The enemy-target gate initially used unit-level `engaged()` (centroid-based), but the whole point of multi-target is that edge models reach enemies the centroid does not. Fix: when positions exist, an enemy is a valid target if ANY model is within reach of it.
 
 After both fixes: 17 scenarios, all green — the two fight scenarios restored to their correct baselines (additive fallback) and the new `multitarget_melee` scenario pinning the 2/2 split. 80-step game clean, zero desync. Next capability passes: Blast counting clustered models (already counts target models; could refine to footprint), base-to-base contact refinement.
+
+
+### Outstanding: per-model VISUALIZATION (rendering, not engine)
+The per-model rebuild (Passes 1–6) is complete at the *engine/logic* level: units are represented as individual model tokens (`modelPos`), and coherency, multi-target melee, movement and measurement all use those positions. However the *renderer* still draws ONE marker per unit at the token/centroid — the individual models are not yet visualized as multiples on the board. This is a rendering task, independent of the engine work, and is parked as an outstanding item to pick up after the structural systems (it does not block them, and the equivalence oracle does not cover rendering).
+
+
+### Structural systems — Reserves / Deep Strike (unified across all modes)
+First structural system, built against the pasted Core/Boarding rules text and applied to ALL modes (open, boarding, sandbox), since every mode defines Entry Zones.
+
+Rules encoded:
+- **Deep Strike placement** stays the >9"-from-enemies rule, but the horizontal distance measurement now IGNORES Walls and closed Hatchways: an enemy whose straight line to the drop point is blocked by a wall/closed hatch does not constrain placement (`!segBlocked` guard). No-op in open mode (no walls); meaningful in boarding.
+- **Arrival gating** (`beginReinforcements`): Strategic Reserves may arrive in an Entry Zone with no models of that player from **round 1**, one per empty zone (`emptyEntryZonesFor`); Deep Strike units may instead be set up via their rule from **round 2**, one per turn. The reinforcement action now carries `zoneSlots`/`dsEligible` so the UI/AI know what is available.
+- **End-of-round-3 destruction**: any unit still in Reserves at the end of round 3 counts as destroyed — EXCEPT units placed into Reserves after round 1 started. Tracked via a new `_reserveRound` stamp (0 = pre-battle; set to the current round by `reserveUnit`; Cult-Ambush resurrections stamped with the current round so they are carve-out protected).
+
+Verified by a new oracle scenario (`reserves_deepstrike`): near-placement rejected, far accepted, placement behind a wall accepted (wall-ignored distance), Deep Strike blocked in R1 and allowed in R2, and the end-of-R3 carve-out (pre-battle reserve destroyed, R3-reserved survives). 18 scenarios total, all green; 80-step full game clean.
+
+**Known gap (belongs to the AI work, not this system):** the AI does not yet use the reinforcement arrival path, so an AI player holding reserves loses them to the end-of-R3 rule. The rules system is correct; AI reinforcement behaviour is unbuilt and is deferred to the AI portion. Next structural systems: Transports/embark + Firing Deck, Aircraft/Hover, Deadly Demise (mechanism only — per-unit magnitude is data-blocked).

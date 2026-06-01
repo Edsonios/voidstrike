@@ -235,5 +235,17 @@
       "leftCount": 2,
       "rightCount": 2
     }
+  },
+  "reserves_deepstrike": {
+    "ok": true,
+    "result": {
+      "nearRejected": true,
+      "farAccepted": true,
+      "wallIgnoredAccepted": true,
+      "dsBlockedR1": true,
+      "dsAllowedR2": true,
+      "earlyDestroyed": true,
+      "lateSurvived": true
+    }
   }
 }

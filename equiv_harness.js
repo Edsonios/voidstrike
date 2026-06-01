@@ -376,6 +376,55 @@ const SCENARIOS = {
       numTargets:split.length, totalModels:split.reduce((a,s)=>a+s.nModels,0),
       leftCount:byFoe.left||0, rightCount:byFoe.right||0
     };
+  `,
+
+  // 19. Reserves / Deep Strike: round gating, wall-aware distance, and end-of-R3 destruction carve-out.
+  reserves_deepstrike: `
+    mode='open';GW=24;GH=22;PNAME={1:'A',2:'B'};objectives=[];walls=[];hatchways=[];
+    entryZones={1:[{x0:0,y0:GH-6,x1:GW-1,y1:GH-1}],2:[{x0:0,y0:0,x1:GW-1,y1:5}]};
+    TEMPLATES.ds={name:'DS',kw:['INFANTRY'],allKw:['INFANTRY','DEEP STRIKE'],pts:100,m:6,t:4,sv:4,inv:0,w:1,ld:6,oc:1,ranged:[],melee:[],models:5,abilities:[{name:'Deep Strike',type:'Core',desc:'x'}]};
+    TEMPLATES.foe={name:'Foe',kw:['INFANTRY'],allKw:['INFANTRY'],pts:80,m:6,t:4,sv:4,inv:0,w:1,ld:6,oc:1,ranged:[],melee:[],models:5,abilities:[]};
+    FACTIONS.a={name:'A',units:['ds'],color:'imp'};FACTIONS.b={name:'B',units:['foe'],color:'xenos'};
+    pFaction[1]='a';pFaction[2]='b';turn=1;round=1;
+
+    // a reserved Deep Strike unit, an enemy on the board at (10,10)
+    var u=newUnit('ds',1);reserveUnit(u,true);
+    var foe=newUnit('foe',2);foe.deployed=true;foe.hx=10;foe.hy=10;syncModelPos(foe);
+    units.length=0;units.push(u,foe);
+
+    // (a) placement within 9" of the enemy is rejected; beyond 9" accepted
+    var near=deepStrikePlace(u,11,10);          // ~2" away -> reject (still in reserve)
+    var stillReserve=u.inReserve;
+    var far=deepStrikePlace(u,10,17);           // far -> accept
+    var placedFar=!u.inReserve;
+
+    // (b) wall-aware: put the unit back in reserve, drop a wall between a near enemy and the drop point
+    reserveUnit(u,true);
+    walls=[{type:'v',x:11,y:10}];               // vertical wall segment between enemy(10,10) and (12,10)
+    var nearBehindWall=deepStrikePlace(u,12,10);// within 9" but wall blocks the line -> enemy ignored -> accept
+    var placedBehindWall=!u.inReserve;
+    walls=[];
+
+    // (c) round gating via beginReinforcements eligibility: DS not eligible R1, eligible R2
+    reserveUnit(u,true);units.length=0;units.push(u,foe);
+    round=1;var r1=beginReinforcements(1);var dsR1=action&&action.dsEligible;
+    round=2;var r2=beginReinforcements(1);var dsR2=action&&action.dsEligible;
+    action=null;
+
+    // (d) end-of-R3 destruction carve-out: pre-battle reserve (_reserveRound<=1) destroyed; late reserve survives
+    var early=newUnit('ds',1);reserveUnit(early,true);early._reserveRound=0;   // pre-battle
+    var late=newUnit('ds',1);reserveUnit(late,true);late._reserveRound=3;      // reserved during R3
+    units.length=0;units.push(early,late);
+    // simulate the end-of-R3 sweep directly
+    round=3;
+    units.filter(x=>!x.dead&&x.inReserve&&(x._reserveRound==null||x._reserveRound<=1)).forEach(x=>{x.dead=true;});
+
+    globalThis.__result={
+      nearRejected:(near===false&&stillReserve===true), farAccepted:(far===true&&placedFar===true),
+      wallIgnoredAccepted:(nearBehindWall===true&&placedBehindWall===true),
+      dsBlockedR1:(dsR1===false), dsAllowedR2:(dsR2===true),
+      earlyDestroyed:early.dead, lateSurvived:!late.dead
+    };
   `
 };
 

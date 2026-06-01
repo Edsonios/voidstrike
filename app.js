@@ -1232,7 +1232,7 @@ function newUnit(tplKey,player){
     m:t.m,t:t.t,sv:t.sv,inv:t.inv,w:t.w,ld:t.ld,oc:t.oc,pts:t.pts,abilities:t.abilities||[],
     maxModels:t.models,models:t.models,woundsLeft:t.w,ranged:t.ranged,melee:t.melee,enh:null,
     hx:-1,hy:-1,modelPos:null,deployed:false,moved:false,advanced:false,fellback:false,charged:false,fought:false,
-    inReserve:false,_setupThisTurn:false,_arriveExtraMove:null,
+    inReserve:false,_reserveRound:0,_setupThisTurn:false,_arriveExtraMove:null,
     shotWith:[],bshock:false,dead:false,_stratAtk:[],_stratDef:[],_ocBonus:0,_ocMult:1,_orderMove:0,_orderOc:0,_orderLd:0};
 }
 function totalWounds(u){return (u.models-1)*u.w+u.woundsLeft;}
@@ -2148,7 +2148,16 @@ function endTurn(){
   if(turn===1)turn=2;
   else{scoreObjectives();log("hd",`▼ END R${round} — VP ${PNAME[1]} ${vp[1]} · ${PNAME[2]} ${vp[2]}`);
     ecResolvePledge(1);ecResolvePledge(2);
-    if(round>=MODES[mode].rounds){endGame();return;}round++;turn=1;
+    if(round>=MODES[mode].rounds){endGame();return;}
+    // End-of-round-3 Reserves rule: any unit still in Strategic Reserves at the end of round 3 counts as
+    // destroyed — EXCEPT units placed into Reserves after the first battle round started (_reserveRound>1).
+    if(round===3){
+      units.filter(u=>!u.dead&&u.inReserve&&(u._reserveRound==null||u._reserveRound<=1)).forEach(u=>{
+        u.dead=true;u.models=0;u.woundsLeft=0;u.modelPos=null;
+        log("sys",`${u.name} never arrived from Reserves — counts as destroyed (end of round 3).`);
+      });
+    }
+    round++;turn=1;
     grantBattleFocus(1);grantBattleFocus(2);allianceOfAgony(1);allianceOfAgony(2);
     khorneBlessings={1:[],2:[]};khorneDice={1:null,2:null};khorneRolled={1:false,2:false};
     dgAfflictExtra={1:[],2:[]};
@@ -2192,6 +2201,7 @@ function reserveUnit(u,silent){
   if(!u||u.dead||u.inReserve)return false;
   u.inReserve=true;u.deployed=false;u.hx=-1;u.hy=-1;u.modelPos=null;
   u.moved=u.advanced=u.fellback=u.charged=false;
+  u._reserveRound=(typeof round==='number')?round:0;
   if(!silent)log("sys",`${u.name} removed to Strategic Reserves.`);
   return true;
 }
@@ -2200,9 +2210,9 @@ function reservesOf(p){return units.filter(u=>!u.dead&&u.inReserve&&u.player===p
 function deepStrikePlace(u,hx,hy){
   if(!u||!u.inReserve)return false;
   if(cellOccupied(hx,hy)){updateHint("Cell occupied.");return false;}
-  // >9" horizontally from every enemy model
-  const tooClose=units.some(e=>!e.dead&&e.player!==u.player&&e.deployed&&Math.hypot(e.hx-hx,e.hy-hy)*HEX_INCH<9);
-  if(tooClose){updateHint("Deep Strike must be more than 9″ from all enemy units.");return false;}
+  // >9" horizontally from every enemy model; Walls and closed Hatchways are ignored (boarding rule; no-op in open mode)
+  const tooClose=units.some(e=>!e.dead&&e.player!==u.player&&e.deployed&&rawDist(unitAnchor(e),{hx,hy})<9&&!segBlocked(e.hx,e.hy,hx,hy));
+  if(tooClose){updateHint("Deep Strike must be more than 9″ from all enemy units (walls/closed hatches block line ignored).");return false;}
   u.inReserve=false;u.deployed=true;u.hx=hx;u.hy=hy;syncModelPos(u);
   u._setupThisTurn=true;u.moved=true;   // arriving counts as having moved (cannot also Normal-move)
   log("sys",`${u.name} arrives from Deep Strike.`);
@@ -2216,14 +2226,29 @@ function rollExtraMove(spec){
   if(spec==='D3+3')return d3()+3;
   return 0;
 }
-/* Reinforcements step: at the start of a player's Movement phase, prompt to place reserves. */
+/* Reinforcements step (start of a player's Movement phase). Arrival rules (unified across modes):
+   - Strategic Reserves (any reserve unit): from battle round 1, the player may bring on ONE unit per
+     Entry Zone of theirs that currently has NO models in it, setting it up within that zone.
+   - Deep Strike units: from battle round 2, ONE such unit per turn may instead be set up via its Deep
+     Strike rule (>9", walls/closed hatches ignored) anywhere legal, instead of an Entry Zone.
+   Per-round caps are tracked on the player via _dsUsedRound (Deep Strike once/round). */
+function emptyEntryZonesFor(p){
+  // zones with no living, deployed, on-board models of player p
+  return entryZones[p].filter(z=>!units.some(u=>u.player===p&&!u.dead&&u.deployed&&!u.inReserve&&
+    u.hx>=z.x0&&u.hx<=z.x1&&u.hy>=z.y0&&u.hy<=z.y1));
+}
 function beginReinforcements(p){
   const res=reservesOf(p);
   if(!res.length)return false;
-  // from battle round 2 onward Deep Strike is always allowed; round 1 only if a unit explicitly may (we allow it)
-  action={kind:'deepstrike',p,queue:res.map(u=>u.id),i:0};
+  const dsEligible = round>=2 && res.some(u=>unitHasDeepStrike(u));      // Deep Strike from round 2
+  const zoneSlots  = emptyEntryZonesFor(p).length;                       // Strategic Reserves from round 1, per empty zone
+  if(zoneSlots<=0 && !dsEligible)return false;                           // nothing can arrive this turn
+  action={kind:'deepstrike',p,queue:res.map(u=>u.id),i:0,zoneSlots,dsEligible,dsUsed:false,zonesUsed:0};
   showActionPanel(true);renderAction();
-  updateHint(`<b>${PNAME[p]}</b>: place Deep Strike reserves (>9″ from enemies), or skip.`);
+  const bits=[];
+  if(zoneSlots>0)bits.push(`${zoneSlots} Entry-Zone arrival${zoneSlots>1?'s':''}`);
+  if(dsEligible)bits.push(`1 Deep Strike`);
+  updateHint(`<b>${PNAME[p]}</b> Reinforcements: ${bits.join(' · ')} available, or skip.`);
   return true;
 }
 
@@ -2682,7 +2707,7 @@ function cultAmbushResurrect(u){
   if(resurgence[u.player]<cost)return;
   resurgence[u.player]-=cost;
   const nu=newUnit(u.tpl,u.player);
-  nu.enh=null;nu.inReserve=true;nu.deployed=false;nu.dead=false;nu.hx=-1;nu.hy=-1;nu._cultAmbush=true;
+  nu.enh=null;nu.inReserve=true;nu.deployed=false;nu.dead=false;nu.hx=-1;nu.hy=-1;nu._cultAmbush=true;nu._reserveRound=(typeof round==='number'?round:0);
   units.push(nu);
   log("hd",`✥ CULT AMBUSH — ${u.name} returns from the shadows (${cost} Resurgence, ${resurgence[u.player]} left).`);
 }

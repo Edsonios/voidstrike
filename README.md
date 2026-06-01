@@ -743,3 +743,11 @@ Building the multi-target case exposed TWO latent bugs the finer grid had introd
 Both were verified harmless to existing behaviour (single/tight units measure identically) — 28 prior scenarios stayed green, a 120-step 10-model game ran clean. New scenario `fight_cluster` pins all of it (10 distinct positions, centroid on anchor, per-model engagement, staged fight resolves + clears). 29 scenarios green.
 
 ALL FOUR PHASES now use stage->confirm (Movement, Shooting, Charge, Fight). NEXT: smooth movement animation, then the dice panel + event-log rework.
+
+
+### Smooth movement animation
+Moves now glide. A purely-visual animation layer captures each model's OLD position when a move commits and interpolates to the (already-final) NEW position over ~320ms with ease-in-out, via requestAnimationFrame. `animateMove(u,fromPos)` records the transition in `_anim[unitId]`; `animatedPos(u)` returns interpolated positions while active and the real `modelPos` otherwise; the render loop reads `animatedPos` so models slide rather than teleport. A self-stopping rAF loop re-renders only while an animation is in flight. Wired at `commitStagedMove` (staged Normal/Fall Back moves) and `moveAdjacent` (charges). The engine state is final the instant the move commits — animation never affects logic, so the 29 oracle scenarios stay green.
+
+Verified the interpolation directly (t=0 shows the old position, mid shows an eased midpoint, end shows the final position; real modelPos is untouched throughout). NOTE: an initial test showed a flat position — that was a test-harness clock-mocking artifact (the mocked performance.now wasn't visible to the eval'd module scope), not a code issue; using a module-readable clock confirmed correct interpolation.
+
+NEXT (final batch item): dice panel + event-log rework — separate dice area, resolve-throw button, per-attack hit/wound/save/FNP dice visible, log shows event history with click-to-see-dice.

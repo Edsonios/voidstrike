@@ -2306,7 +2306,9 @@ function confirmMoveStage(){
 // Commit a staged move: place the model line, set flags/facing, log. Shared by Normal/Fall Back commits.
 function commitStagedMove(u,hx,hy,a,label){
   const _fx=u.hx,_fy=u.hy;
+  const _oldPos=(u.modelPos||[]).map(p=>({hx:p.hx,hy:p.hy}));   // capture for animation
   placeModelsLine(u,a.ax,a.ay,a.bx,a.by);
+  animateMove(u,_oldPos);                                        // glide models to the new line
   u.moved=true; if(/Fall Back/.test(label))u.fellback=true;
   setFacingFromMove(u,_fx,_fy,hx,hy);
   if(u.fellback&&u.bshock){const r=d6();if(r<=2){u.models=Math.max(0,u.models-1);log("kill","&nbsp;&nbsp;Desperate Escape: 1 model lost.");}}
@@ -2446,10 +2448,12 @@ function confirmCharge(){
 }
 function rollCharge(){confirmCharge();}   // kept for the existing Roll-button wiring
 function moveAdjacent(u,tgt){
+  const _oldPos=(u.modelPos||[]).map(p=>({hx:p.hx,hy:p.hy}));   // capture for animation
   const dx=Math.sign(tgt.hx-u.hx),dy=Math.sign(tgt.hy-u.hy);
   let nx=clamp(tgt.hx-dx,0,GW-1),ny=clamp(tgt.hy-dy,0,GH-1);
   if(cellOccupied(nx,ny,u.id)){nx=clamp(tgt.hx-dx,0,GW-1);ny=clamp(tgt.hy,0,GH-1);}
   const _fx=u.hx,_fy=u.hy;u.hx=nx;u.hy=ny;syncModelPos(u);setFacingFromMove(u,_fx,_fy,nx,ny);
+  animateMove(u,_oldPos);                                        // glide models into the charge
 }
 
 /* In-combat movement on the single-token board. The real game moves each MODEL up to 3" toward the closest
@@ -2850,6 +2854,51 @@ function placeUnit(hx,hy){
    RENDER
    =================================================================== */
 function gc(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim();}
+/* ===================================================================
+   ANIMATION (purely visual — engine state is already final)
+   When a move/charge/consolidate commits, we capture each model's OLD position and glide it to its NEW
+   position over a short eased duration. The renderer reads animatedPos(u) which interpolates while an
+   animation is active and falls back to the real modelPos otherwise. No engine state depends on this.
+   =================================================================== */
+let _anim={};            // unitId -> {from:[{hx,hy}], to:[{hx,hy}], t0, dur}
+let _animRAF=null;
+function _easeInOut(t){return t<0.5?2*t*t:1-Math.pow(-2*t+2,2)/2;}
+// Begin animating unit u from a captured set of old model positions to its current (already-committed) ones.
+function animateMove(u,fromPos,dur){
+  if(!u||!u.modelPos||!fromPos||!fromPos.length)return;
+  const to=u.modelPos.map(p=>({hx:p.hx,hy:p.hy}));
+  // pair old->new by index; if counts differ (casualties), pair up to the min and let extras snap
+  const n=Math.min(fromPos.length,to.length);
+  const from=[];for(let i=0;i<n;i++)from.push({hx:fromPos[i].hx,hy:fromPos[i].hy});
+  _anim[u.id]={from,to:to.slice(0,n),t0:(typeof performance!=='undefined'?performance.now():Date.now()),dur:dur||320};
+  _startAnimLoop();
+}
+function _startAnimLoop(){
+  if(_animRAF!=null)return;
+  const tick=()=>{
+    const now=(typeof performance!=='undefined'?performance.now():Date.now());
+    let active=false;
+    for(const id in _anim){const a=_anim[id];if(now-a.t0>=a.dur)delete _anim[id];else active=true;}
+    render();
+    if(active&&typeof requestAnimationFrame!=='undefined'){_animRAF=requestAnimationFrame(tick);}
+    else{_animRAF=null;}
+  };
+  if(typeof requestAnimationFrame!=='undefined')_animRAF=requestAnimationFrame(tick);
+}
+// Displayed positions for a unit: interpolated from->to while animating, else the real modelPos.
+function animatedPos(u){
+  const a=_anim[u.id];
+  const real=(u.modelPos&&u.modelPos.length)?u.modelPos:[{hx:u.hx,hy:u.hy}];
+  if(!a)return real;
+  const now=(typeof performance!=='undefined'?performance.now():Date.now());
+  const t=_easeInOut(Math.min(1,(now-a.t0)/a.dur));
+  const out=[];
+  for(let i=0;i<real.length;i++){
+    if(i<a.from.length){out.push({hx:a.from[i].hx+(a.to[i].hx-a.from[i].hx)*t, hy:a.from[i].hy+(a.to[i].hy-a.from[i].hy)*t});}
+    else out.push(real[i]);
+  }
+  return out;
+}
 function render(){
   ctx.clearRect(0,0,cv.width,cv.height);
   for(let y=0;y<GH;y++)for(let x=0;x<GW;x++){ctx.fillStyle=((x+y)&1)?'#0f131a':'#11161e';ctx.fillRect(x*CELL,y*CELL,CELL,CELL);}
@@ -2897,7 +2946,7 @@ function render(){
   // units
   const tgtId=action&&action.target;
   units.forEach(u=>{if(u.dead||u.hx<0)return;
-    const mp=(u.modelPos&&u.modelPos.length)?u.modelPos:[{hx:u.hx,hy:u.hy}];
+    const mp=animatedPos(u);
     const a=unitAnchor(u); const cA=cellCenter(a.hx,a.hy);
     const base=u.player===1?gc('--imp'):gc('--cha');
     const edge=u.id===selId?gc('--gold2'):(u.player===1?gc('--impd'):gc('--chad'));

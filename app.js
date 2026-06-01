@@ -1281,6 +1281,117 @@ function syncModelPos(u){
     for(const p of out){p.hx=u.hx;p.hy=u.hy;}   // edge case: keep anchor exact (transparency over fan-out)
   }
   u.modelPos=out;
+  recenterToken(u);
+}
+/* Authority inversion (Pass 4): modelPos is now the canonical store; the token hx/hy is a DERIVED
+   centroid of modelPos. recenterToken() recomputes the token from the model positions — called at the
+   end of syncModelPos and after any per-model move. Because syncModelPos still builds a symmetric
+   cluster around the requested anchor, the recomputed centroid equals what callers set, so all existing
+   behaviour is byte-identical (proven by the oracle). The win: per-model writes (moveModel) now update
+   the anchor automatically, and any future code that displaces individual models keeps the token honest. */
+function recenterToken(u){
+  if(!u||!u.modelPos||!u.modelPos.length)return;
+  let sx=0,sy=0;for(const p of u.modelPos){sx+=p.hx;sy+=p.hy;}
+  // round to the nearest cell so the token stays a valid grid coordinate (consumers measure via unitAnchor,
+  // which uses the exact float centroid; the rounded token is for legacy raw reads and rendering).
+  u.hx=Math.round(sx/u.modelPos.length);
+  u.hy=Math.round(sy/u.modelPos.length);
+}
+// Move a single model (by index) to a new cell, then re-derive the token. The primitive the capability
+// layer (coherency, multi-target melee, spreading) will build on. No-op if index/unit invalid.
+function moveModel(u,i,hx,hy){
+  if(!u||!u.modelPos||i<0||i>=u.modelPos.length)return;
+  u.modelPos[i]={hx:clamp(hx,0,GW-1),hy:clamp(hy,0,GH-1)};
+  recenterToken(u);
+}
+/* ---- Unit Coherency (capability layer) -------------------------------------------------------
+   Core Rules: a unit of 2-6 models must have every model within 2" of at least ONE other model;
+   a unit of 7+ models within 2" of at least TWO others. On this board 1 cell = 2" (HEX_INCH), and
+   syncModelPos fans models out to a ~2-cell radius, so "within coherency" is modelled as a
+   connectivity test with COH_CELLS=2 (a model is "linked" to another within 2 cells). A unit is
+   coherent if every model has the required number of links AND the whole unit forms one connected
+   group. A freshly-synced symmetric cluster always passes (so existing behaviour is unchanged and
+   the oracle stays green); incoherency only arises once individual models are moved apart by the
+   capability layer — which is exactly when the rule should bite.                                   */
+const COH_CELLS=2;   // "within 2 horizontally" on the 2"-per-cell board, matched to the cluster radius
+function _linkCount(modelPos,i){
+  let n=0;const a=modelPos[i];
+  for(let j=0;j<modelPos.length;j++){if(j===i)continue;
+    if(Math.max(Math.abs(modelPos[j].hx-a.hx),Math.abs(modelPos[j].hy-a.hy))<=COH_CELLS)n++;}
+  return n;
+}
+function inCoherency(u){
+  if(!u||!u.modelPos||u.modelPos.length<=1)return true;
+  const need=u.modelPos.length>=7?2:1;
+  // every model must have >= need links
+  for(let i=0;i<u.modelPos.length;i++){if(_linkCount(u.modelPos,i)<need)return false;}
+  // and the unit must form a single connected group (flood fill via the link graph)
+  const seen=new Array(u.modelPos.length).fill(false);const stack=[0];seen[0]=true;let count=1;
+  while(stack.length){const i=stack.pop();const a=u.modelPos[i];
+    for(let j=0;j<u.modelPos.length;j++){if(seen[j])continue;
+      if(Math.max(Math.abs(u.modelPos[j].hx-a.hx),Math.abs(u.modelPos[j].hy-a.hy))<=COH_CELLS){seen[j]=true;count++;stack.push(j);}}}
+  return count===u.modelPos.length;
+}
+// End-of-turn coherency: remove stranded models one at a time until the unit is coherent again.
+// Per the rules these count as destroyed but trigger NO on-death rules — so we shrink modelPos and
+// the model count directly, without invoking the death-trigger chain. Returns models removed.
+function enforceCoherency(u){
+  if(!u||u.dead||!u.modelPos||u.modelPos.length<=1)return 0;
+  let removed=0,guard=0;
+  while(!inCoherency(u)&&u.modelPos.length>1&&guard++<50){
+    // remove the most-isolated model (fewest links; ties -> farthest from centroid)
+    const c=unitAnchor(u);let worst=0,wScore=1e9;
+    for(let i=0;i<u.modelPos.length;i++){
+      const links=_linkCount(u.modelPos,i);
+      const dc=Math.hypot(u.modelPos[i].hx-c.hx,u.modelPos[i].hy-c.hy);
+      const score=links*1000-dc;            // fewest links first, then farthest
+      if(score<wScore){wScore=score;worst=i;}
+    }
+    u.modelPos.splice(worst,1);
+    u.models=Math.max(0,u.models-1);
+    if(u.models<=0){u.dead=true;u.woundsLeft=0;break;}
+    removed++;
+    recenterToken(u);
+  }
+  return removed;
+}
+// Multi-target melee (capability layer): partition the attacking unit's MODELS by which enemy unit each
+// model is individually engaged with, using per-model positions. Returns [{enemy, nModels}], so a unit
+// straddling two enemies splits its attacks between them (Core Rules: models in a unit may attack different
+// targets). A model engaged with several enemies is assigned to its closest; a model engaged with none
+// (while the unit is engaged overall) falls back to the unit's closest enemy, so no attacks are lost.
+function meleeTargetSplit(u){
+  const hasPos=u.modelPos&&u.modelPos.length===Math.max(1,u.models);
+  // An enemy is a valid melee target if the unit is engaged with it. With per-model positions, "engaged"
+  // means ANY model is within reach of that enemy (the centroid alone can be out of reach while edge
+  // models are adjacent — exactly the multi-target case). Without positions, fall back to unit-level engaged().
+  const foeReach=(mp,e)=>{const ea=unitAnchor(e);if(segBlocked(mp.hx,mp.hy,ea.hx,ea.hy))return false;
+    const reach=ENGAGE_IN+(pathThroughOpenHatch({hx:mp.hx,hy:mp.hy},e)?1.3:0);return rawDist(mp,ea)<=reach;};
+  let foes;
+  if(hasPos){
+    foes=units.filter(e=>!e.dead&&e.player!==u.player&&u.modelPos.some(mp=>foeReach(mp,e)));
+  }else{
+    foes=units.filter(e=>!e.dead&&e.player!==u.player&&engaged(u,e));
+  }
+  if(!foes.length)return [];
+  const anchorClosest=()=>{let best=foes[0],bd=1e9;for(const e of foes){const d=dist(u,e);if(d<bd){bd=d;best=e;}}return best;};
+  if(!hasPos){
+    return [{enemy:anchorClosest(), nModels:u.models}];
+  }
+  const counts=new Map();
+  const add=e=>{const c=counts.get(e.id)||{enemy:e,nModels:0};c.nModels++;counts.set(e.id,c);};
+  for(const mp of u.modelPos){
+    let chosen=null,cd=1e9;
+    for(const e of foes){
+      const ea=unitAnchor(e);
+      if(segBlocked(mp.hx,mp.hy,ea.hx,ea.hy))continue;
+      const reach=ENGAGE_IN+(pathThroughOpenHatch({hx:mp.hx,hy:mp.hy},e)?1.3:0);
+      const d=rawDist(mp,ea);
+      if(d<=reach&&d<cd){cd=d;chosen=e;}
+    }
+    add(chosen||anchorClosest());
+  }
+  return [...counts.values()];
 }
 function maxWounds(u){return u.maxModels*u.w;}
 function belowHalf(u){return totalWounds(u)<=maxWounds(u)/2;}
@@ -2025,6 +2136,13 @@ function advancePhase(){
   else endTurn();
 }
 function endTurn(){
+  // End-of-turn Unit Coherency: the player whose turn is ending removes stranded models from their units
+  // (counts as destroyed but triggers no on-death rules). Only acts on units actually out of coherency,
+  // so healthy clusters are untouched.
+  units.filter(u=>u.player===turn&&!u.dead&&u.deployed&&!u.inReserve).forEach(u=>{
+    const r=enforceCoherency(u);
+    if(r>0)log("sys",`${u.name} loses ${r} model${r>1?'s':''} to Coherency.`);
+  });
   // Gate of Infinity / end-of-opponent's-Fight reserve recall, for the player whose turn is NOT ending
   maybeGateOfInfinity(turn===1?2:1);
   if(turn===1)turn=2;
@@ -3305,8 +3423,11 @@ function autoResolvePhase(){
         let pick=elig.find(u=>u.player===starter) || elig.find(u=>u.player!==starter);
         if(!pick)break;
         pileInMove(pick);                                   // 1. Pile In (3" toward closest enemy)
-        const t=units.filter(e=>!e.dead&&e.player!==pick.player&&engaged(pick,e));
-        if(t.length){t.sort((a,b)=>dist(pick,a)-dist(pick,b));resolveAttacks(pick,t[0],pick.melee[0],pick.models,false);}
+        // 2. Make melee attacks — split the unit's models across the enemies they are individually engaged with.
+        const split=meleeTargetSplit(pick);
+        split.sort((a,b)=>dist(pick,a.enemy)-dist(pick,b.enemy));   // resolve closest target first (stable order)
+        for(const part of split){ if(pick.dead)break; if(part.enemy.dead)continue;
+          resolveAttacks(pick,part.enemy,pick.melee[0],part.nModels,false); }
         pick.fought=true;
         if(!pick.dead)consolidateMove(pick);                // 3. Consolidate (toward enemy, else objective)
         starter=starter===1?2:1;   // alternate

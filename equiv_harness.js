@@ -328,6 +328,54 @@ const SCENARIOS = {
     __seedRng(1616);var rYes=resolveAttacks(a,t2,a.ranged[0],1,true);
     visible=realVisible;
     globalThis.__result={noLoS_hits:rNo.hits, loS_hits:rYes.hits, indirectPenaltyApplied:(rNo.hits<=rYes.hits)};
+  `,
+
+  // 17. Unit Coherency: a synced cluster is coherent; a stranded model is not; end-of-turn enforcement
+  //     removes exactly the stranded model(s); the 7+ threshold needs two links.
+  coherency_capability: `
+    mode='open';GW=24;GH=22;PNAME={1:'A',2:'B'};objectives=[];walls=[];hatchways=[];
+    TEMPLATES.sq={name:'Sq',kw:['INFANTRY'],allKw:['INFANTRY'],pts:100,m:6,t:4,sv:4,inv:0,w:1,ld:6,oc:1,ranged:[],melee:[],models:5,abilities:[]};
+    TEMPLATES.big={name:'Big',kw:['INFANTRY'],allKw:['INFANTRY'],pts:140,m:6,t:4,sv:4,inv:0,w:1,ld:6,oc:1,ranged:[],melee:[],models:8,abilities:[]};
+    FACTIONS.a={name:'A',units:['sq','big'],color:'imp'};pFaction[1]='a';turn=1;
+    var u=newUnit('sq',1);u.deployed=true;u.hx=10;u.hy=10;syncModelPos(u);
+    var coherentCluster=inCoherency(u);                       // expect true (synced cluster)
+    // strand model 0 far away
+    moveModel(u,0,22,2);
+    var afterStrand=inCoherency(u);                           // expect false
+    var modelsBefore=u.models;
+    var removed=enforceCoherency(u);                          // should drop the stranded model
+    var coherentAfter=inCoherency(u);                         // expect true again
+    // 7+ unit needs TWO links: a line where an end model has only one neighbour within 2 is incoherent
+    var b=newUnit('big',1);b.deployed=true;b.hx=10;b.hy=10;syncModelPos(b);
+    var bigCoherent=inCoherency(b);                           // synced 8-model cluster, expect true
+    globalThis.__result={
+      coherentCluster:coherentCluster, afterStrand:afterStrand,
+      removed:removed, modelsBefore:modelsBefore, modelsAfter:u.models, coherentAfter:coherentAfter,
+      bigClusterCoherent:bigCoherent
+    };
+  `,
+
+  // 18. Multi-target melee: a unit with populated per-model positions straddling TWO enemies splits its
+  //     models between them. With modelPos populated and models placed adjacent to two different foes,
+  //     meleeTargetSplit must return two entries whose model counts sum to the unit size.
+  multitarget_melee: `
+    mode='open';GW=24;GH=22;PNAME={1:'A',2:'B'};objectives=[];walls=[];hatchways=[];
+    TEMPLATES.sq={name:'Sq',kw:['INFANTRY'],allKw:['INFANTRY'],pts:100,m:6,t:4,sv:4,inv:0,w:1,ld:6,oc:1,ranged:[],melee:[{name:'b',type:'M',rng:0,a:2,skill:3,s:5,ap:-1,d:1,ab:{}}],models:4,abilities:[]};
+    TEMPLATES.foe={name:'Foe',kw:['INFANTRY'],allKw:['INFANTRY'],pts:80,m:6,t:4,sv:5,inv:0,w:1,ld:6,oc:1,ranged:[],melee:[],models:3,abilities:[]};
+    FACTIONS.a={name:'A',units:['sq'],color:'imp'};FACTIONS.b={name:'B',units:['foe'],color:'xenos'};
+    pFaction[1]='a';pFaction[2]='b';turn=1;
+    var u=newUnit('sq',1);u.deployed=true;u.hx=10;u.hy=10;
+    var eA=newUnit('foe',2);eA.deployed=true;eA.hx=8;eA.hy=10;syncModelPos(eA);
+    var eB=newUnit('foe',2);eB.deployed=true;eB.hx=12;eB.hy=10;syncModelPos(eB);
+    units.length=0;units.push(u,eA,eB);
+    // hand-place u's 4 models: two adjacent to eA (left), two adjacent to eB (right)
+    u.modelPos=[{hx:9,hy:10},{hx:9,hy:11},{hx:11,hy:10},{hx:11,hy:11}];recenterToken(u);
+    var split=meleeTargetSplit(u);
+    var byFoe={};split.forEach(s=>{byFoe[s.enemy.hx<10?'left':'right']=s.nModels;});
+    globalThis.__result={
+      numTargets:split.length, totalModels:split.reduce((a,s)=>a+s.nModels,0),
+      leftCount:byFoe.left||0, rightCount:byFoe.right||0
+    };
   `
 };
 

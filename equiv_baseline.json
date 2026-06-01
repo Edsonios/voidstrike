@@ -214,5 +214,26 @@
       "loS_hits": 9,
       "indirectPenaltyApplied": true
     }
+  },
+  "coherency_capability": {
+    "ok": true,
+    "result": {
+      "coherentCluster": true,
+      "afterStrand": false,
+      "removed": 1,
+      "modelsBefore": 5,
+      "modelsAfter": 4,
+      "coherentAfter": true,
+      "bigClusterCoherent": true
+    }
+  },
+  "multitarget_melee": {
+    "ok": true,
+    "result": {
+      "numTargets": 2,
+      "totalModels": 4,
+      "leftCount": 2,
+      "rightCount": 2
+    }
   }
 }

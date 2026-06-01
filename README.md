@@ -447,3 +447,35 @@ Migrated to read `unitAnchor`/`positionsOf`: `visible` (line-of-sight), `engaged
 Verified beyond transparency: with an asymmetric `modelPos` whose centroid is displaced from the token, `engaged` correctly flips to true when the centroid (not the token) is in range, and `unitOnObjective` follows the centroid too — proving the consumers genuinely read the per-model footprint, not merely fall through to the token. Oracle byte-identical green (Pass-2 clusters are symmetric, so centroid==token in normal play); 80-step full game clean with zero modelPos desync.
 
 Next: authority inversion — make `modelPos` canonical and the token a derived centroid, then migrate the movement candidate-cell reads as part of that holistic change. After that, the capabilities per-model positions unlock (Unit Coherency, multi-target melee, Blast-vs-clustered-models, base-to-base).
+
+
+### Per-model rebuild — Pass 4 (authority inversion)
+The pivotal pass: `modelPos` is now the **canonical** store and the token `hx/hy` is a **derived centroid** of it — the inverse of the original single-token model. Still behaviour-neutral (15/15 oracle byte-identical green), because `syncModelPos` keeps building a symmetric cluster around the requested anchor, so the recomputed centroid lands exactly on the integer cell callers set.
+
+Added `recenterToken(u)` (token = rounded centroid of modelPos; called at the end of `syncModelPos` and after any per-model move) and `moveModel(u,i,hx,hy)` — the per-model move primitive the capability layer will build on. `unitAnchor` still returns the exact float centroid for measurement; the rounded token is for legacy raw reads and rendering.
+
+Why inversion was safe to do now and not earlier: Passes 1–3 routed every position *measurement* through `unitAnchor`/`positionsOf`, so by this pass nothing downstream cared which representation was authoritative — flipping the source of truth changed no observable behaviour. Verified beyond transparency: moving all models via `moveModel` correctly drags the derived token with them; flinging a single model asymmetrically pulls the centroid partway (token 15→17 with one model flung to 23 while others stay ~15) — the divergence that was structurally impossible under the single-token model. 80-step full game clean, zero integrity failures (modelPos length == model count, token always a valid integer cell).
+
+State: the engine now genuinely represents units as individual model tokens with a derived anchor, and has a primitive to move models independently. Remaining for the capability layer (each proven green, each likely adding oracle scenarios): Unit Coherency enforcement, multi-target melee (a unit splitting attacks across several engaged enemies), Blast counting clustered models, and base-to-base contact. Per-model *wargear loadouts* remain blocked on data, but the structure is now ready to carry them (a per-model `loadout[]` parallel to `modelPos`).
+
+
+### Per-model rebuild — Pass 5 (capability layer: Unit Coherency)
+First pass of the capability layer — the first that *uses* per-model positions to add behaviour rather than preserve it. Authored against the Core Rules coherency text: a unit of 2-6 models must have every model within 2" of at least one other; 7+ within 2" of at least two; at end of turn, models out of coherency are removed one at a time (counting as destroyed but triggering no on-death rules).
+
+On this board 1 cell = 2", and `syncModelPos` builds a contiguous ~2-cell-radius cluster, so coherency is modelled as a connectivity test (`COH_CELLS=2`): a unit is coherent if every model has the required number of links (1, or 2 for 7+ models) AND all models form one connected group (flood-fill). A freshly-synced cluster always passes, which is why this is behaviour-neutral in normal play and the prior 15 oracle scenarios stayed green. Incoherency only arises once individual models are displaced via `moveModel` — exactly when the rule should apply.
+
+Added `inCoherency(u)`, `enforceCoherency(u)` (removes the most-isolated model repeatedly until coherent; shrinks `modelPos`/`models` directly, no death-trigger chain, per the rule), and an `endTurn` hook that runs it on the ending player's units. A new oracle scenario pins the behaviour: synced cluster coherent (true), stranding a model breaks it (false), end-of-turn removes exactly the one stranded model (5→4), unit coherent again after, and an 8-model cluster satisfies the two-link threshold. 16 scenarios total; 80-step game clean with coherency active and zero model/position desync.
+
+NOTE on harness hygiene: inserting the scenario initially clobbered the tail of `weapon_indirect` (a str_replace boundary slip); caught immediately by a syntax error, the indirect scenario was restored and both verified before recording. Next capability passes: multi-target melee (a unit splitting attacks across several engaged enemies, now that models have distinct positions), Blast counting clustered models, base-to-base contact.
+
+
+### Per-model rebuild — Pass 6 (capability layer: multi-target melee)
+Second capability pass: a melee unit now splits its attacks across the enemies its models are individually engaged with, instead of dogpiling the single closest foe. This is the most direct payoff of per-model positions — a unit straddling two enemies fights both.
+
+`meleeTargetSplit(u)` partitions the unit's models by which enemy each is engaged with (per-model position vs enemy anchor, same ENGAGE_IN reach, hatch-aware), returning `[{enemy,nModels}]`; the Fight loop resolves `resolveAttacks` once per partition with that enemy's share of models. Verified: a 4-model unit placed two-left/two-right between two foes splits 2/2 across both targets, all models accounted for.
+
+Two design corrections during the pass, both caught by the oracle and worth recording:
+1. **Null-modelPos regression.** The first version assumed `modelPos` was always populated; units positioned without `syncModelPos` (including the oracle's fight scenarios) have null `modelPos`, so `positionsOf` returned a single fallback position and the unit attacked as if it had ONE model — silently dropping attacks. The oracle flagged `fight_fightsfirst` and `fight_consolidate_chain` immediately. Fix: when `modelPos` is absent or its length ≠ model count, fall back to the exact old behaviour (whole unit vs closest engaged enemy), making the capability strictly additive.
+2. **Centroid-gated foes.** The enemy-target gate initially used unit-level `engaged()` (centroid-based), but the whole point of multi-target is that edge models reach enemies the centroid does not. Fix: when positions exist, an enemy is a valid target if ANY model is within reach of it.
+
+After both fixes: 17 scenarios, all green — the two fight scenarios restored to their correct baselines (additive fallback) and the new `multitarget_melee` scenario pinning the 2/2 split. 80-step game clean, zero desync. Next capability passes: Blast counting clustered models (already counts target models; could refine to footprint), base-to-base contact refinement.

@@ -1,0 +1,188 @@
+{
+  "combat_basic": {
+    "ok": true,
+    "result": {
+      "target": {
+        "tpl": "tgt",
+        "p": 2,
+        "hx": 12,
+        "hy": 10,
+        "models": 10,
+        "w": 1,
+        "dead": false,
+        "fought": false,
+        "charged": false,
+        "reserve": false,
+        "bshock": false
+      },
+      "attacker": {
+        "tpl": "atk",
+        "p": 1,
+        "hx": 10,
+        "hy": 10,
+        "models": 5,
+        "w": 1,
+        "dead": false,
+        "fought": false,
+        "charged": false,
+        "reserve": false,
+        "bshock": false
+      }
+    }
+  },
+  "core_stealth": {
+    "ok": true,
+    "result": {
+      "ranged_subHit": 1,
+      "melee_subHit": 0
+    }
+  },
+  "core_loneop": {
+    "ok": true,
+    "result": {
+      "near_targetable": true,
+      "far_targetable": false,
+      "isLoneOp": true
+    }
+  },
+  "fight_fightsfirst": {
+    "ok": true,
+    "result": {
+      "active_normal": {
+        "tpl": "nm",
+        "p": 1,
+        "hx": 10,
+        "hy": 10,
+        "models": 0,
+        "w": 0,
+        "dead": true,
+        "fought": false,
+        "charged": false,
+        "reserve": false,
+        "bshock": false
+      },
+      "nonactive_ff": {
+        "tpl": "ff",
+        "p": 2,
+        "hx": 11,
+        "hy": 10,
+        "models": 5,
+        "w": 1,
+        "dead": false,
+        "fought": true,
+        "charged": false,
+        "reserve": false,
+        "bshock": false
+      }
+    }
+  },
+  "fight_consolidate_chain": {
+    "ok": true,
+    "result": {
+      "killer": {
+        "tpl": "killer",
+        "p": 1,
+        "hx": 11,
+        "hy": 10,
+        "models": 4,
+        "w": 1,
+        "dead": false,
+        "fought": true,
+        "charged": false,
+        "reserve": false,
+        "bshock": false
+      },
+      "w1": {
+        "tpl": "weak",
+        "p": 2,
+        "hx": 11,
+        "hy": 10,
+        "models": 0,
+        "w": 0,
+        "dead": true,
+        "fought": true,
+        "charged": false,
+        "reserve": false,
+        "bshock": false
+      },
+      "w2": {
+        "tpl": "weak",
+        "p": 2,
+        "hx": 12,
+        "hy": 10,
+        "models": 1,
+        "w": 1,
+        "dead": false,
+        "fought": true,
+        "charged": false,
+        "reserve": false,
+        "bshock": false
+      }
+    }
+  },
+  "fight_consolidate_objective": {
+    "ok": true,
+    "result": {
+      "moved": true,
+      "pos": [
+        11,
+        11
+      ],
+      "onObjective": true
+    }
+  },
+  "objective_control": {
+    "ok": true,
+    "result": {
+      "control": {
+        "1": 15,
+        "2": 5
+      }
+    }
+  },
+  "woundtable_branches": {
+    "ok": true,
+    "result": {
+      "twice": 2,
+      "doubleExact": 2,
+      "greater": 3,
+      "equal": 4,
+      "less": 5,
+      "half": 6,
+      "halfExact": 6
+    }
+  },
+  "damage_allocation": {
+    "ok": true,
+    "result": {
+      "target": {
+        "tpl": "big",
+        "p": 2,
+        "hx": 12,
+        "hy": 10,
+        "models": 3,
+        "w": 2,
+        "dead": false,
+        "fought": false,
+        "charged": false,
+        "reserve": false,
+        "bshock": false
+      }
+    }
+  },
+  "join_target_keyword": {
+    "ok": true,
+    "result": {
+      "infMatchesInfantry": true,
+      "vehMatchesInfantry": false,
+      "vehMatchesVehicle": true,
+      "infMatchesVehicle": false
+    }
+  },
+  "faction_drukhari_empowered": {
+    "ok": true,
+    "result": {
+      "skipped": "no drukhari templates loaded"
+    }
+  }
+}

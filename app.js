@@ -859,29 +859,141 @@ function slug(s){return s.toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_
    {ratio:{n,per}|null, who:string|null, replace:[names], with:[names], take:[names], raw}. */
 function parseLoadoutOptions(rows){
   const out={options:[],unparsed:[]};
-  const clean=s=>String(s).replace(/^(a|an|its|their|the)\s+/i,'').replace(/^one of(?:\s+the following)?[: ]+/i,'').replace(/[.;]+$/,'').trim();
-  const splitList=s=>String(s).replace(/^one of(?:\s+the following)?[: ]+/i,'').replace(/\bor\b/gi,',').split(',').map(clean).filter(Boolean);
+  const clean=s=>String(s).replace(/^(a|an|its|their|the)\s+/i,'').replace(/^\d+\s+/,'').replace(/[.;*]+$/,'').trim();
+  // multi-item lists in the real data are "one of the following:" with items often newline-joined and
+  // each prefixed by a count ("1 castellan axe1 sentinel blade"). Split on newlines AND on the "<digit>"
+  // boundaries that begin each item, then strip leading counts.
+  const splitChoices=s=>{
+    let t=String(s).replace(/^.*one of the following:?/i,'');
+    // A choice item may itself be an "A and B" bundle ("1 plasma pistol and 1 Astartes chainsword").
+    // Insert a separator before a count ("1 "/"2 ") that starts a NEW choice — but NOT when that count is
+    // joined to the previous item by "and" (i.e. it's part of the same bundle). So we break before "<n> "
+    // only when preceded by a letter/paren that is NOT the word "and".
+    t=t.replace(/([a-z\)])\s+and\s+(\d+\s)/gi,'$1 and \u0001$2');   // protect "and 1 X" bundle joins
+    t=t.replace(/([a-z\)])\s*(\d+\s)/g,'$1\n$2');                    // break before a new choice's count
+    t=t.replace(/\u0001/g,'');                                       // unprotect
+    return t.split(/\n+/).map(x=>x.replace(/^\d+\s+/,'').replace(/\s+and\s+\d+\s+/gi,' and ').replace(/[.;*]+$/,'').trim()).filter(Boolean);
+  };
+  // split an "A and B" replace-target into its weapons ("bolt pistol and Astartes chainsword" -> [a,b])
+  const splitAnd=s=>String(s).replace(/\band\b/gi,'\u0003').split('\u0003').map(x=>x.replace(/^\d+\s+/,'').replace(/^(a|an|its|their|the)\s+/i,'').replace(/[.;*]+$/,'').trim()).filter(Boolean);
+  const splitWith=s=>{
+    let t=String(s).replace(/^:\s*/,'');               // strip a leading colon ("equipped with:1 X")
+    if(/one of the following/i.test(t))return splitChoices(t);
+    if(/^:?\s*\d/.test(s)&&/\d.*\d/.test(t)){            // colon-joined count-prefixed list without "one of the following"
+      let z=t.replace(/([a-z\)])\s+and\s+(\d+\s)/gi,'$1 and \u0001$2');  // protect "and 1 X" bundle joins
+      z=z.replace(/([a-z\)])\s*(\d+\s)/g,'$1\n$2');                       // break before a new item's count
+      z=z.replace(/\u0001/g,'');                                          // unprotect
+      const parts=z.split(/\n+/).map(x=>x.replace(/^\d+\s+/,'').replace(/\s+and\s+\d+\s+/gi,' and ').replace(/[.;*]+$/,'').trim()).filter(Boolean);
+      if(parts.length>=1)return parts;
+    }
+    return t.replace(/\bor\b/gi,',').split(',').map(x=>x.replace(/^\d+\s+/,'').replace(/^(a|an|its|their|the)\s+/i,'').replace(/[.;*]+$/,'').trim()).filter(Boolean);
+  };
   (rows||[]).forEach(r=>{
     const raw=stripHtml(r.description||r.button||r.line||'').trim();
     if(!raw)return;
-    const text=raw.replace(/\u2019/g,"'");
-    let m, parsed=null;
-    if((m=text.match(/(\d+)\s+in\s+(\d+)\s+models?\s+may\s+(?:be\s+)?(?:equipped\s+with|replace[d]?)\s+(?:its?\s+)?(.+?)\s+with\s+(.+?)[.;]?$/i))){
-      parsed={ratio:{n:+m[1],per:+m[2]},who:null,replace:[clean(m[3])],with:splitList(m[4]),take:[],raw};
-    } else if((m=text.match(/for\s+every\s+(\d+)\s+models?(?:\s+in\s+this\s+unit)?[, ]+(?:up to\s+)?(\d+)\s+models?\s+may\s+(?:replace|be equipped with)\s+(?:its?\s+)?(.+?)\s+with\s+(.+?)[.;]?$/i))){
-      parsed={ratio:{n:+m[2],per:+m[1]},who:null,replace:[clean(m[3])],with:splitList(m[4]),take:[],raw};
-    } else if((m=text.match(/(?:the\s+)?([A-Z][\w' -]*?(?:Sergeant|Champion|Leader|Exarch|Nob|Boss|Pack Leader|Aspirant|Superior))\s+may\s+(?:be\s+equipped\s+with|take)\s+(.+?)[.;]?$/i))){
-      parsed={ratio:null,who:clean(m[1]),replace:[],with:[],take:splitList(m[2]),raw};
-    } else if((m=text.match(/(?:the\s+)?([A-Z][\w' -]*?(?:Sergeant|Champion|Leader|Exarch|Nob|Boss|Superior))\s+may\s+replace\s+(?:its?\s+)?(.+?)\s+with\s+(.+?)[.;]?$/i))){
-      parsed={ratio:null,who:clean(m[1]),replace:[clean(m[2])],with:splitList(m[3]),take:[],raw};
-    } else if((m=text.match(/(?:this model|each model|any model|the bearer)\s+may\s+replace\s+(?:its?\s+)?(.+?)\s+with\s+(?:one of[: ]+)?(.+?)[.;]?$/i))){
-      parsed={ratio:null,who:'model',replace:[clean(m[1])],with:splitList(m[2]),take:[],raw};
-    } else if((m=text.match(/(?:this model|each model|any model|the bearer)\s+may\s+(?:take|be equipped with)\s+(.+?)[.;]?$/i))){
-      parsed={ratio:null,who:'model',replace:[],with:[],take:splitList(m[1]),raw};
+    if(/^none\.?$/i.test(raw))return;                     // "None"/"None." = no options, not a failure
+    let text=raw.replace(/\u2019/g,"'").replace(/\bcan replaced\b/gi,'can be replaced').replace(/\bcan be replace\b/gi,'can be replaced').replace(/replaced one of the following/gi,'replaced with one of the following'); // source typos
+    if(/^\*/.test(text))return;                          // footnote restriction, not an option
+    if(/'s .+ replaced with /i.test(text) && !/\bcan \b/i.test(text)) text=text.replace(/ replaced with /i,' can be replaced with '); // source typo: missing 'can be'
+    // Non-options that should NOT count as parse failures:
+    if(/\bis equipped with:/i.test(text))return;         // a named model's FIXED default loadout
+    if(/^this weapon cannot be replaced/i.test(text))return;
+    if(/^for every .+ it can have .*token/i.test(text))return;   // unit-level token/upgrade grant, not a weapon swap
+    if(/\bplasmacyte\b/i.test(text))return;                      // Plasmacyte is modelled as a unit ability (grantPlasmacytes), not a wargear swap
+    // Conditional options: "If <condition>, <clause>" / "If <condition>:<clause>" — keep the clause + condition.
+    let condition=null;
+    let cond=text.match(/^if\s+(.+?)[,:]\s*(.+)$/i);
+    if(cond && /(can be equipped with|can be replaced|can each have|can have|can replace|replaced with)/i.test(cond[2])){
+      condition=cond[1].trim(); text=cond[2].trim();
+    } else if(/can do one of the following/i.test(text)){
+      // Choice-of-ACTIONS: "<subject> can do one of the following: <action1>. <action2>." where each action
+      // is itself a full clause ("Replace its A and B with C", "Be equipped with D"). Parse the subject,
+      // split the actions, and recursively parse each as its own option; emit a single option carrying a
+      // `choices` array. The player picks exactly one action.
+      const cm=text.match(/^(.+?)\s+can do one of the following:\s*(.+)$/i);
+      if(cm){
+        const cwho=subjName(cm[1]);
+        // split actions on sentence boundaries before a capitalised verb ("Replace"/"Be equipped"/"Have")
+        let body=cm[2].replace(/\.\s*(Replace|Be equipped|Have|Take)\b/g,'.\u0002$1');
+        const acts=body.split('\u0002').map(a=>a.replace(/\.\s*$/,'').trim()).filter(Boolean);
+        const choices=[];
+        acts.forEach(a=>{
+          // each action: "Replace its A (and B) with C" | "Be equipped with D" | "Take D"
+          let am;
+          if((am=a.match(/^replace\s+(?:its|their)?\s*(.+?)\s+with\s+(.+)$/i))){
+            choices.push({replace:splitAnd(am[1]),with:splitWith(am[2]),take:[]});
+          } else if((am=a.match(/^be equipped with\s+(.+)$/i))){
+            choices.push({replace:[],with:[],take:splitWith(am[1])});
+          } else if((am=a.match(/^take\s+(.+)$/i))){
+            choices.push({replace:[],with:[],take:splitWith(am[1])});
+          }
+        });
+        if(choices.length){ out.options.push({ratio:null,who:cwho,replace:[],with:[],take:[],choices,condition:null,raw}); return; }
+      }
+      out.unparsed.push(raw);return;                     // couldn't structure it -> keep verbatim
     }
-    if(parsed)out.options.push(parsed); else out.unparsed.push(raw);
+
+    // ---- STAGE 1: peel off a quantifier prefix and record the ratio ----------------------------------
+    // recognises: "Any number of <X>", "All (of the )?models|<X>", "Up to N <X>", "N <X>",
+    //             "For every N models, (up to )?M <X>", and a bare "This model".
+    let ratio=null, rest=text;
+    let m;
+    // (leading 'This unit' is handled as a normal subject by Stage-2's verb split)
+    if((m=text.match(/^for every (\d+) models?,?\s+(?:up to\s+)?(\d+|two|three|four|five)\s+(.*)$/i))){
+      ratio={n:wnum(m[2]),per:+m[1]}; rest=m[3];
+    } else if((m=text.match(/^any number of\s+(.*)$/i))){
+      ratio={n:'*',per:1}; rest=m[1];
+    } else if((m=text.match(/^all(?: of the)?\s+models?\s+(?:in this unit\s+)?(.*)$/i))){
+      ratio={n:'*',per:1}; rest=m[1];
+    } else if((m=text.match(/^all\s+(.+?)\s+in this unit\s+(.*)$/i))){
+      ratio={n:'*',per:1}; rest=m[2];                    // "All <NamedModels> in this unit ..."
+    } else if((m=text.match(/^up to\s+(\d+|two|three|four|five)\s+(.*)$/i))){
+      ratio={n:wnum(m[1]),per:0}; rest=m[2];
+    } else if((m=text.match(/^(\d+|one|two|three|four|five)\s+(.*)$/i))){
+      ratio={n:wnum(m[1]),per:0}; rest=m[2];             // bare "2 models ...", "one model ...", "1 <Named> ..."
+    }
+    // strip a residual leading subject noun ("models", "<Named>s", "<Named>") before the verb,
+    // keeping the subject name for who when it is not a generic "models"
+    let who=null;
+    let vm=rest.match(/^(.*?)\b(can each be replaced|can be replaced|can each have|can have|can each be equipped|can be equipped|can each replace|can replace|must be equipped)\b(.*)$/i);
+    if(!vm){ out.unparsed.push(raw); return; }
+    let subjectPhrase=vm[1].trim(), verb=vm[2].toLowerCase(), tail=vm[3].trim();
+
+    // ---- STAGE 2: parse the action --------------------------------------------------------------------
+    // possessive subject: "<subject>'s <weapon>"  -> the weapon being replaced lives in the subject phrase
+    let possWeapon=null;
+    const pm=subjectPhrase.match(/^(.*?)'s\s+(.+)$/);
+    if(pm){ who=subjName(pm[1]); possWeapon=pm[2].trim(); }
+    else { who=subjName(subjectPhrase); }
+
+    let parsed=null;
+    if(/be equipped/.test(verb)){
+      parsed={ratio,who,replace:[],with:[],take:splitWith(stripLead(tail)),condition,raw};
+    } else if(/can each have|can have/.test(verb)){
+      // "... have [their] A replaced with B"
+      const hm=tail.match(/^(?:their\s+)?(.+?)\s+replaced with\s+(.+)$/i);
+      if(hm)parsed={ratio,who,replace:[clean(hm[1])],with:splitWith(hm[2]),take:[],condition,raw};
+    } else if(/can each replace|can replace/.test(verb)){
+      // "... replace [its|their] A with B"  (active voice; supports "with:" colon and bundle targets)
+      const rm=tail.match(/^(?:its|their)?\s*(.+?)\s+with[\s:]+(.+)$/i);
+      if(rm)parsed={ratio,who,replace:splitAnd(rm[1]),with:splitWith(':'+rm[2]),take:[],condition,raw};
+    } else if(/be replaced/.test(verb)){
+      // possessive form: weapon is possWeapon, replacement is in tail ("with B" or "with:1 B and 1 C")
+      const wm=tail.match(/^with[\s:]+(.+)$/i);
+      if(wm&&possWeapon)parsed={ratio,who,replace:splitAnd(possWeapon),with:splitWith(':'+wm[1]),take:[],condition,raw};
+      else if(wm)parsed={ratio,who,replace:[],with:splitWith(':'+wm[1]),take:[],condition,raw};  // whole-model swap
+    }
+    if(parsed&&(parsed.with.length||parsed.take.length))out.options.push(parsed);
+    else out.unparsed.push(raw);
   });
   return out;
+  function wnum(x){if(!x)return 0;if(/^\d+$/.test(x))return +x;return {two:2,three:3,four:4,five:5}[String(x).toLowerCase()]||0;}
+  function stripLead(s){return String(s).replace(/^(?:with\s*)?:?\s*/i,'');}
+  function subjName(s){
+    s=String(s).replace(/\bmodels?\b/ig,'').replace(/^(the|a|an)\s+/i,'').replace(/^\d+\s*/,'').replace(/\badditional\b/ig,'').replace(/\bin this unit\b/i,'').trim();
+    if(!s||/^this$/i.test(s))return 'model';
+    return s;
+  }
 }
 
 /* Build TEMPLATES + FACTIONS from parsed CSV tables (incl. abilities). */
@@ -1297,6 +1409,7 @@ function newUnit(tplKey,player){
     maxModels:t.models,models:t.models,woundsLeft:t.w,ranged:t.ranged,melee:t.melee,enh:null,
     hx:-1,hy:-1,modelPos:null,deployed:false,moved:false,advanced:false,fellback:false,charged:false,fought:false,
     inReserve:false,_reserveRound:0,_setupThisTurn:false,_arriveExtraMove:null,
+    _plasmacytes:0,
     _capacity:(t.transportCapacity||0),_firingDeck:(t.firingDeck||0),_embarkedIn:null,_embarked:[],_disembarkedThisTurn:false,
     shotWith:[],bshock:false,dead:false,_stratAtk:[],_stratDef:[],_ocBonus:0,_ocMult:1,_orderMove:0,_orderOc:0,_orderLd:0};
 }
@@ -2420,7 +2533,7 @@ function placeUnit(hx,hy){
   u.hx=hx;u.hy=hy;u.deployed=true;syncModelPos(u);log("sys",`${PNAME[p]} deploys ${u.name}.`);
   deployIdx[p]++;deployTurn=deployTurn===1?2:1;
   if(deployIdx[1]>=deployList[1].length&&deployIdx[2]>=deployList[2].length){
-    deploying=false;turn=1;phaseIdx=0;log("hd","◆ ALL FORCES DEPLOYED — BATTLE BEGINS");grantBattleFocus(1);grantBattleFocus(2);grantResurgence(1);grantResurgence(2);grantFlux(1);grantFlux(2);seedDread(1);seedDread(2);allianceOfAgony(1);allianceOfAgony(2);ecSeedFavoured(1);ecSeedFavoured(2);ecMakePledge(1,1);ecMakePledge(2,1);grantMiracleRound(1);grantMiracleRound(2);beginPhase();}
+    deploying=false;turn=1;phaseIdx=0;log("hd","◆ ALL FORCES DEPLOYED — BATTLE BEGINS");grantBattleFocus(1);grantBattleFocus(2);grantResurgence(1);grantResurgence(2);grantFlux(1);grantFlux(2);seedDread(1);seedDread(2);allianceOfAgony(1);allianceOfAgony(2);ecSeedFavoured(1);ecSeedFavoured(2);ecMakePledge(1,1);ecMakePledge(2,1);grantMiracleRound(1);grantMiracleRound(2);grantPlasmacytes(1);grantPlasmacytes(2);beginPhase();}
   selId=null;renderAll();render();updateHint();renderPhases();
 }
 
@@ -3193,6 +3306,19 @@ function autoIssueOrders(p){
     });
   });
 }
+/* Plasmacyte (Necron Destroyer Cult — Skorpekh & Ophydian Destroyers): at the start of the battle a unit
+   can have 1 Plasmacyte per 3 models. Each is a once-per-battle token: when the unit is selected to fight,
+   spend one to give the unit's melee weapons [DEVASTATING WOUNDS] until end of phase. We grant the maximum
+   (floor(models/3)) at battle start — the "can have" cap — which the muster screen can later make a choice. */
+function unitHasPlasmacyte(u){
+  return (u.abilities||[]).some(a=>/plasmacyte/i.test(a.name||''));
+}
+function grantPlasmacytes(p){
+  units.forEach(u=>{ if(u.player!==p||u.dead)return;
+    if(unitHasPlasmacyte(u)){ u._plasmacytes=Math.floor(Math.max(1,u.models)/3);
+      if(u._plasmacytes>0)log("sys",`${u.name} has ${u._plasmacytes} Plasmacyte${u._plasmacytes>1?'s':''}.`); }
+  });
+}
 function grantBattleFocus(p){
   // Start of battle round: refresh the Battle Focus pool (unspent tokens are lost). +1 for Warhost's
   // Martial Grace, +1 if a Timeless Strategist enhancement is present on the army.
@@ -3607,8 +3733,18 @@ function autoResolvePhase(){
         // 2. Make melee attacks — split the unit's models across the enemies they are individually engaged with.
         const split=meleeTargetSplit(pick);
         split.sort((a,b)=>dist(pick,a.enemy)-dist(pick,b.enemy));   // resolve closest target first (stable order)
+        // Plasmacyte: when selected to fight, spend one token (once per battle each) to give this unit's
+        // melee weapons [DEVASTATING WOUNDS] until end of phase. Engine consumes a token and flags melee.
+        let _plasmaFlagged=null;
+        if(pick._plasmacytes>0){
+          pick._plasmacytes--;
+          _plasmaFlagged=(pick.melee||[]).filter(w=>!(w.ab&&w.ab.devastating));
+          _plasmaFlagged.forEach(w=>{w.ab=w.ab||{};w.ab.devastating=true;});
+          log("sys",`${pick.name} injects a Plasmacyte — melee weapons gain Devastating Wounds (${pick._plasmacytes} left).`);
+        }
         for(const part of split){ if(pick.dead)break; if(part.enemy.dead)continue;
           resolveAttacks(pick,part.enemy,pick.melee[0],part.nModels,false); }
+        if(_plasmaFlagged)_plasmaFlagged.forEach(w=>{delete w.ab.devastating;});   // buff lasts the phase; restore weapon template after this unit's fight
         pick.fought=true;
         if(!pick.dead)consolidateMove(pick);                // 3. Consolidate (toward enemy, else objective)
         starter=starter===1?2:1;   // alternate

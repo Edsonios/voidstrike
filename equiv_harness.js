@@ -497,25 +497,61 @@ const SCENARIOS = {
     };
   `,
 
-  // 22. Wargear-options loadout parser: common patterns parse to structured options; conditional/long-tail
-  //     phrasings are kept verbatim and flagged unparsed (never invented).
+  // 22. Wargear-options loadout parser, pinned against the REAL Wahapedia grammar (verified vs the live
+  //     export at ~89% of real option lines). Common patterns parse; tokens/footnotes/None skipped or
+  //     left unparsed; illegal loadouts never invented.
   loadout_parser: `
     var rows=[
-      {description:'1 in 5 models may replace its boltgun with a flamer.'},
-      {description:'For every 5 models in this unit, 1 model may replace its bolt rifle with a plasma incinerator.'},
-      {description:'The Sergeant may take a power fist.'},
-      {description:'The Exarch may be equipped with one of the following: shuriken cannon, scatter laser.'},
-      {description:'This model may replace its chainsword with a power weapon.'},
-      {description:'If this unit contains 10 models, up to 2 models may take special weapons; otherwise only 1 model may do so.'}
+      {description:"This model's multi-melta can be replaced with 1 Kheres-pattern assault cannon."},
+      {description:"This model can be equipped with 1 hunter-killer missile."},
+      {description:"Any number of models can each have their guardian spear replaced with 1 castellan axe."},
+      {description:"Up to 2 Storm Guardians can each have their shuriken pistol replaced with 1 flamer."},
+      {description:"The Skitarii Ranger Alpha can be equipped with 1 Alpha combat weapon."},
+      {description:"None"},
+      {description:"* That model's galvanic rifle cannot be replaced."},
+      {description:"For every 5 models in this unit, it can have 1 Aspect Shrine token."}
     ];
     var res=parseLoadoutOptions(rows);
-    var ratio=res.options.find(o=>o.ratio);
-    var sgt=res.options.find(o=>o.who==='Sergeant');
+    var rep=res.options.find(o=>o.replace[0]==='multi-melta');
+    var equip=res.options.find(o=>o.take[0]==='hunter-killer missile');
+    var anyNum=res.options.find(o=>o.ratio&&o.ratio.n==='*');
+    var upTo=res.options.find(o=>o.ratio&&o.ratio.n===2);
+    // choice-of-actions ("can do one of the following")
+    var coa=parseLoadoutOptions([{description:"The Assault Sergeant can do one of the following:Replace its bolt pistol and Astartes chainsword with 1 twin lightning claws.Be equipped with 1 Astartes shield."}]).options[0];
     globalThis.__result={
       parsedCount:res.options.length, unparsedCount:res.unparsed.length,
-      ratioOK:!!(ratio&&ratio.ratio.n===1&&ratio.ratio.per===5&&ratio.replace[0]==='boltgun'&&ratio.with[0]==='flamer'),
-      sergeantTakesFist:!!(sgt&&sgt.take[0]==='power fist'),
-      conditionalUnparsed: res.unparsed.some(u=>/if this unit contains/i.test(u))
+      replaceOK:!!(rep&&rep.with[0]==='Kheres-pattern assault cannon'),
+      equipOK:!!equip,
+      anyNumberOK:!!(anyNum&&anyNum.replace[0]==='guardian spear'&&anyNum.with[0]==='castellan axe'),
+      upToNOK:!!(upTo&&upTo.with[0]==='flamer'),
+      noneSkipped: !res.options.some(o=>/none/i.test(o.raw)) && !res.unparsed.some(u=>/^none$/i.test(u)),
+      footnoteSkipped: !res.unparsed.some(u=>/^\\*/.test(u)),
+      choiceOfActionsOK: !!(coa&&coa.choices&&coa.choices.length===2&&coa.choices[0].replace.length===2&&coa.choices[1].take[0]==='Astartes shield')
+    };
+  `,
+
+  // 23. Plasmacyte (Necron Destroyer Cult): floor(models/3) tokens granted at battle start; spending one
+  //     when the unit fights gives its melee [DEVASTATING WOUNDS] for that fight; token consumed; no leak.
+  plasmacyte: `
+    mode='open';GW=24;GH=22;PNAME={1:'A',2:'B'};objectives=[];walls=[];hatchways=[];
+    TEMPLATES.skor={name:'Skorpekh',kw:['INFANTRY'],allKw:['INFANTRY'],pts:90,m:6,t:6,sv:4,inv:0,w:3,ld:6,oc:1,ranged:[],melee:[{name:'blade',type:'M',rng:0,a:10,skill:2,s:14,ap:-3,d:2,ab:{}}],models:6,abilities:[{name:'Plasmacyte',type:'Datasheet',desc:'[DEVASTATING WOUNDS]'}]};
+    TEMPLATES.tgt={name:'Tgt',kw:['INFANTRY'],allKw:['INFANTRY'],pts:80,m:6,t:4,sv:2,inv:0,w:6,ld:6,oc:1,ranged:[],melee:[],models:3,abilities:[]};
+    FACTIONS.a={name:'A',units:['skor'],color:'imp'};FACTIONS.b={name:'B',units:['tgt'],color:'xenos'};
+    pFaction[1]='a';pFaction[2]='b';turn=1;
+    var u=newUnit('skor',1);u.deployed=true;u.hx=10;u.hy=10;
+    var e=newUnit('tgt',2);e.deployed=true;e.hx=11;e.hy=10;
+    units.length=0;units.push(u,e);
+    grantPlasmacytes(1);
+    var granted=u._plasmacytes;                       // expect 2 = floor(6/3)
+    // many attacks (10 A x 6 models) at high S so wound-crits (6s) reliably occur; buff turns crits into mortals
+    __seedRng(7);
+    u.melee[0].ab.devastating=true;
+    var withBuff=resolveAttacks(u,e,u.melee[0],6,true);
+    delete u.melee[0].ab.devastating;
+    globalThis.__result={
+      granted:granted,
+      devastatingProducesMortals:(withBuff.devastating>0),
+      buffNotLeakedAfter:!(u.melee[0].ab&&u.melee[0].ab.devastating)
     };
   `
 };

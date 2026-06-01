@@ -537,3 +537,48 @@ Each template now carries `loadout:{options:[...],unparsed:[...]}`:
 Verified by a parser unit-test and a pinned oracle scenario (`loadout_parser`): ratio/who/replace/with/take extracted correctly, "one of the following:" prefixes stripped, conditional lines correctly left unparsed. 21 scenarios green.
 
 **IMPORTANT — needs a re-fetch to populate:** the currently-loaded factions-data.json predates this change and has NO options data, so `loadout` is empty for now. To activate: re-fetch (the new whitelist pulls Datasheets_options) and upload the new factions-data.json. Then real parse coverage can be measured and verified under the oracle. DEPLOY: changed files are app.js and netlify/functions/wahapedia.js (plus harness/baseline). The Netlify function change requires a redeploy for the new CSV to be fetchable.
+
+
+### Loadout parser — validated against the real export, rewritten to the actual grammar
+The re-fetched factions-data.json (built by the new importer) carried options text for 1319 datasheets / 2804 lines. The first run was the honest reckoning: **0% parsed** — the parser had been written against an ASSUMED grammar ("may replace its X with Y") while the real Wahapedia phrasing is different ("This model's X can be replaced with 1 Y", "can be equipped with", "Any number of models can each have their X replaced with Y", "For every N models…"). The earlier unit-test had passed only because its inputs were written in the assumed grammar — a real testing-against-assumptions miss that the re-fetch exposed.
+
+Rewrote the parser against the actual grammar (verified by bucketing all 2804 real lines). Coverage now **89% of real option lines** (2243 / 2513), with 291 "None" placeholders correctly skipped (no options) and footnote restriction lines ("* That model's X cannot be replaced") excluded. The remaining ~11% is genuine long tail — token/upgrade grants ("…can have 1 Aspect Shrine token"), and rare nested phrasings ("Each model can have each X it is equipped with replaced…") — kept as raw text and flagged unparsed. No illegal loadout is ever invented.
+
+Parsed options are structured as `{ratio:{n,per}|null, who, replace:[], with:[], take:[], raw}`: ratio `*`/N for "any number"/"up to N", named subjects ("Skitarii Ranger Alpha"), and multi-choice "one of the following:" lists split correctly (including the newline-joined, count-prefixed real format). The oracle scenario `loadout_parser` is now pinned against REAL Wahapedia strings (replace/equip/any-number/up-to-N parse; None and footnotes skipped). 21 scenarios green.
+
+This unblocks the structure for per-model loadouts; wiring these options into actual per-model wargear assignment (and thus exact Firing Deck weapon selection and composition-dependent ability riders) is the next consumer step, now that the data exists and parses.
+
+
+### Loadout parser — coverage raised to 93%
+After inspecting the unparsed remainder, several were recoverable patterns the parser had narrowly missed, not true long tail: "can each BE EQUIPPED WITH" (vs "have…replaced"), active-voice "can each replace their A with B", "Up to two/three" word-numbers, "For every N models, up to M <named> can each have…", and colon-joined option lists ("equipped with:1 X"). Added these patterns plus a wordNum helper. Coverage rose 89% → **93%** of real option lines (2325/2513); datasheets with any unparsed line fell 112 → 93.
+
+The genuinely-remaining tail (~134 lines across 93 datasheets) is dominated by conditional branches ("If this unit contains 9 or fewer models: …"), multi-item bundles ("A and 1 B and 1 C"), and a nested per-weapon case — phrasings where forcing more regex would risk mis-parsing, so they are kept verbatim and flagged unparsed (never invented). The full datasheet list is available via the parser's unparsed flags. Oracle scenario `loadout_parser` (pinned to real Wahapedia strings) stays green; 21 scenarios total.
+
+
+### Loadout parser — generalized to ~100% of tractable options
+Pushed coverage from 93% to **99.7%** (2415 parsed / 7 unparsed) after the user rightly pushed back that the affected units (Plague Marines, Chosen, Death Korps, Crisis Battlesuits, the Aspect squads) are the core of 10e. Investigation confirmed the gap was mostly the PARSER being narrow, not the data being hard.
+
+Replaced the one-pattern-at-a-time approach with a **generalized two-stage parser**: Stage 1 peels off a quantifier prefix (any number / all (of the) models / all <Named> in this unit / up to N / N / "for every N, up to M <Named>" / bare "this model"/"this unit") and records the ratio; Stage 2 splits on the action verb (can [each] be replaced / can [each] have … replaced / can [each] be equipped with / can [each] replace … with / must be equipped) and extracts replace/with/take. This collapsed dozens of subject·verb variants into one cross-product and caught the "All models in this unit can each have their A replaced with B" family that was the bulk of the miss (Necrons, Custodes, Reivers, Tyranids, etc.).
+
+Also: conditional options ("If this unit contains 10 models, …", "If this model is equipped with X, …") are now parsed with the condition preserved on the option (34 captured) rather than dropped; named models' FIXED loadouts ("Cassius is equipped with: …") and token/attachment grants are correctly skipped as non-options; two source typos ("can replaced", "replaced one of the following", missing "can be") are normalized.
+
+The irreducible **7 remaining** are genuinely structural, not parser gaps: multi-item bundle swaps ("replace boltgun AND melee weapon with 1 X and 1 Y"; "thermal cannon → 1 A and 1 B"), unit-attachment grants (Plasmacyte), and choice-of-actions ("can do one of the following: Replace…/Replace…"). These need a richer data model than replace→with; forcing a parse would risk an illegal loadout, so they are kept verbatim for the muster screen to present as raw text. Oracle scenario `loadout_parser` re-recorded (the token-grant line now correctly skipped rather than counted unparsed); 21 scenarios green.
+
+
+### Plasmacyte (Necron Destroyer Cult) — modelled as an ability, not a loadout swap
+The "For every 3 models in this unit, this unit can have 1 Plasmacyte" line was one of the 7 unparsed loadout lines, but it isn't a wargear swap — it's a unit-attachment-plus-combat-buff. Built it against the real ability text (verified in the export for both units that have it: Skorpekh Destroyers and Ophydian Destroyers): "Once per battle for each Plasmacyte this unit has, when this unit is selected to fight, … until the end of the phase, melee weapons equipped by models in this unit have [DEVASTATING WOUNDS]."
+
+Implementation: `_plasmacytes` on each unit, granted `floor(models/3)` at battle start by `grantPlasmacytes` (the "can have" cap; the muster screen can later make it a choice). In the Fight phase, when a Plasmacyte-bearing unit is selected to fight and has a token, the engine spends one and flags the unit's melee weapons with `devastating` for that fight (the engine already resolves [DEVASTATING WOUNDS]: critical wounds become mortals bypassing saves), then restores the weapon template afterward so the buff doesn't leak. The parser now skips Plasmacyte lines as non-swap grants.
+
+Verified: 6-model unit gets 2 tokens; spending one makes critical wounds produce mortal damage (12 devastating mortals in a high-volume test vs 0 without); no buff leak; and a full 80-step game spent both tokens automatically with no errors. Oracle scenario `plasmacyte` pins grant count, devastating effect, and no-leak. NOTE: the scenario was first written with too few attacks to roll a wound-crit (showing a false 0 devastating); corrected to high-volume so it exercises the real path. 22 scenarios green.
+
+Loadout parser unparsed count drops from 7 to 5 (the two Plasmacyte lines are now handled).
+
+
+### Loadout parser — 100% coverage (choice-of-actions + multi-item bundles)
+Closed the final gap from the Assault Sergeant example. The remaining unparsed lines were two distinct structures, both now handled, taking coverage to a genuine **100.00% (2420/2420 option lines, 0 unparsed)**:
+
+1. **Choice-of-actions** — "<subject> can do one of the following: Replace A and B with C. Be equipped with D." Now parsed into an option carrying a `choices` array, each entry a full sub-action ({replace,with,take}); the player picks one. Verified: the Assault Sergeant yields 2 choices — a two-weapon replace (bolt pistol + chainsword → twin lightning claws) and a shield equip.
+2. **Multi-item bundles** — "X (and Y) can be replaced with: 1 A and 1 B". A correctness fix, not just coverage: the earlier splitter MANGLED these (breaking "1 plasma pistol and 1 chainsword" into separate wrong items — a false positive producing illegal loadouts). Now "and"-joined bundles are protected during splitting and kept as one option; `splitAnd` separates the multi-weapon replace side. Also handles the active-voice "can replace their A with:" and colon-join ("with:1 X") forms.
+
+The `choices` field is new on parsed options (alongside ratio/who/replace/with/take/condition). Oracle scenario `loadout_parser` now asserts the choice-of-actions structure; 22 scenarios green. Every wargear option in the export is now structured data for the muster-screen consumer — multi-item bundles and per-model conditional swaps included.

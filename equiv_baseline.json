@@ -272,10 +272,22 @@
     "ok": true,
     "result": {
       "parsedCount": 5,
-      "unparsedCount": 1,
-      "ratioOK": true,
-      "sergeantTakesFist": true,
-      "conditionalUnparsed": true
+      "unparsedCount": 0,
+      "replaceOK": true,
+      "equipOK": true,
+      "anyNumberOK": true,
+      "upToNOK": true,
+      "noneSkipped": true,
+      "footnoteSkipped": true,
+      "choiceOfActionsOK": true
+    }
+  },
+  "plasmacyte": {
+    "ok": true,
+    "result": {
+      "granted": 2,
+      "devastatingProducesMortals": true,
+      "buffNotLeakedAfter": true
     }
   }
 }
